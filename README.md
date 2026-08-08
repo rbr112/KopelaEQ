@@ -10,12 +10,13 @@
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?style=flat-square&logo=typescript&logoColor=white)
 ![Chrome](https://img.shields.io/badge/Chrome-116%2B-34A853?style=flat-square&logo=googlechrome&logoColor=white)
 ![Privacy](https://img.shields.io/badge/audio-local%20processing-2ea44f?style=flat-square)
+[![License: MIT](https://img.shields.io/badge/License-MIT-F4C430?style=flat-square)](LICENSE)
 
 Process the audio of the tab you choose with an 11-band parametric EQ, presets, dynamics, metering, spectrum analysis and output protection — directly in the browser.
 
 **Maintained by Kopela.**
 
-[Download](../../releases/latest) · [Changelog](CHANGELOG.md) · [Privacy](PRIVACY.md) · [Architecture](ARCHITECTURE.md) · [Security](SECURITY.md)
+[Download](../../releases/latest) · [Changelog](CHANGELOG.md) · [Privacy](PRIVACY.md) · [Architecture](ARCHITECTURE.md) · [Security](SECURITY.md) · [License](LICENSE)
 </div>
 
 ---
@@ -164,4 +165,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Audio topology or tuning changes must be
 
 ## License
 
-No open-source license has been selected yet. Copyright remains with the maintainer unless a license is added later.
+KopelaEQ is released under the [MIT License](LICENSE).
+
+Copyright (c) 2026 Kopela.
