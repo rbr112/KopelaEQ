@@ -29,6 +29,7 @@ with zipfile.ZipFile(source) as z:
     assert names == sorted(names), 'source archive order is not deterministic'
     assert all(info.date_time == (2020,1,1,0,0,0) for info in z.infolist()), 'non-deterministic source timestamps'
     assert 'src/audio/audio-session.ts' in names and 'tests/golden_eq_response_browser.py' in names
+    assert 'LICENSE' in names, 'MIT license missing from source archive'
     assert not any('node_modules/' in name for name in names)
 
 expected = {}
