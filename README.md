@@ -1,102 +1,167 @@
-# KopelaEQ 1.22.0
+<div align="center">
+  <img src="static/icons/icon-128.png" width="96" height="96" alt="KopelaEQ icon">
 
-Maintainer: **Kopela**
+# KopelaEQ
 
-KopelaEQ is a Manifest V3 Chrome/Chromium extension for real-time processing of the audio from the tab selected by the user. It provides Gain, an 11-band parametric EQ, optional Dynamics, Meter/Spectrum, presets, and output Protection.
+**Real-time parametric EQ and audio processing for Chromium tabs.**
 
-## Release status
+[![Version](https://img.shields.io/badge/version-1.22.0-7c6cff?style=flat-square)](../../releases/latest)
+![Manifest](https://img.shields.io/badge/Manifest-V3-4285F4?style=flat-square&logo=googlechrome&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?style=flat-square&logo=typescript&logoColor=white)
+![Chrome](https://img.shields.io/badge/Chrome-116%2B-34A853?style=flat-square&logo=googlechrome&logoColor=white)
+![Privacy](https://img.shields.io/badge/audio-local%20processing-2ea44f?style=flat-square)
 
-**1.22.0 is the frozen first public-release baseline.**
+Process the audio of the tab you choose with an 11-band parametric EQ, presets, dynamics, metering, spectrum analysis and output protection — directly in the browser.
 
-The release hardens the accepted 1.21.1 audio/UI baseline without retuning the EQ, Dynamics, or Protection DSP. The maintainer has completed a real-use smoke test and accepted the current sound/behavior. Longer device-specific soak testing remains a recommended pre-Store check and is listed in `RELEASE_CHECKLIST.md`.
+**Maintained by Kopela.**
+
+[Download](../../releases/latest) · [Changelog](CHANGELOG.md) · [Privacy](PRIVACY.md) · [Architecture](ARCHITECTURE.md) · [Security](SECURITY.md)
+</div>
+
+---
+
+## Features
+
+| | |
+|---|---|
+| **11-band parametric EQ** | Low Shelf + 9 Peak bands + High Shelf with frequency, gain and Q editing. |
+| **Presets** | Bundled and user presets with save, update, duplicate, rename, delete, import and export. |
+| **Dynamics** | Optional broadband / multiband processing with click-free true bypass. |
+| **Protection** | Output peak protection with Light, Medium and Strong modes. |
+| **Meter** | Pre/Post Protection Peak, RMS, Peak Hold and gain-reduction monitoring. |
+| **Spectrum** | Native browser frequency analysis with Fast, Balanced and Smooth response modes. |
+| **Per-tab sessions** | One serialized audio session per captured tab with safe Start/Stop lifecycle handling. |
+| **Local processing** | KopelaEQ does not intentionally record or upload captured tab audio. |
 
 ## Audio path
 
-The audible path is:
-
-`Tab -> input gain -> Low Shelf + 9 Peak + High Shelf -> master gain -> Dynamics bypass -> Protection bypass -> Output`
-
-Meter/Spectrum branches are analyser-only side chains and do not feed back into the audible output.
-
-## Highlights
-
-- 11-band EQ with the original `Low Shelf + 9 Peak + High Shelf` topology.
-- Native `BiquadFilterNode.getFrequencyResponse()` visualization using the real engine sample rate when available.
-- Exact bundled-preset fixtures and browser-native golden EQ tests at 44.1/48 kHz.
-- Click-free shared `BypassGate` for Dynamics and Protection.
-- Per-tab capture lifecycle with explicit `idle / starting / active / stopping` states.
-- Pre/Post Protection metering, peak hold, gain-reduction display, and Spectrum modes.
-- TypeScript strict mode, typed runtime messages, and runtime validation at Chrome message boundaries.
-- Deterministic release/source ZIP generation and SHA-256 verification.
-
-## Source layout
-
 ```text
-src/
-  shared/       message contracts, state, presets, constants
-  audio/        AudioSession, BypassGate, native EQ response
-  background/   CaptureManager + MV3 service worker
-  offscreen/    offscreen audio-session runtime
-  popup/        popup, EQ editor, draggable internal panels
-  types/        minimal Chrome API declarations used by this project
+Tab audio
+   ↓
+Input gain
+   ↓
+Low Shelf → 9 × Peak → High Shelf
+   ↓
+Master gain
+   ↓
+Dynamics   ── true bypass when disabled
+   ↓
+Protection ── true bypass when disabled
+   ↓
+Browser output
 ```
 
-## Build
+Meter and Spectrum use analyser-only side chains and do not feed back into the audible signal path.
 
-Requirements:
+## Install
 
-- Node.js 20+
-- TypeScript **5.8.3**
-- Python 3 for QA/release ZIP scripts
-- Chrome/Chromium for browser QA tests
+### From a release
 
-```text
+1. Download `kopelaeq-1.22.0.zip` from **Releases**.
+2. Extract the archive.
+3. Open `chrome://extensions`.
+4. Enable **Developer mode**.
+5. Click **Load unpacked** and select the extracted folder.
+6. Open a normal tab with audio, open KopelaEQ and enable **Audio On**.
+
+> Restricted browser pages such as `chrome://` pages and the Chrome Web Store cannot be captured.
+
+### From source
+
+Requirements: Node.js 20+, TypeScript **5.8.3**, Python 3 and Chrome/Chromium for browser QA.
+
+```bash
 npm install
 npm run typecheck
 npm run build
 npm run qa
-npm run release
 ```
 
-`npm run build` emits browser-native ESM with TypeScript 5.8.3. The build fails if another TypeScript compiler version is used.
+The built extension is emitted to `extension/` as browser-native ESM.
 
-`npm run release` runs the QA suite, rebuilds the extension, creates deterministic release/source ZIP files, verifies archive contents, and writes `dist/SHA256SUMS.txt`.
+## Architecture
 
-## Install locally
+```mermaid
+flowchart LR
+    P[Popup UI] -->|typed messages| B[MV3 Service Worker]
+    B --> C[CaptureManager]
+    C --> O[Offscreen Document]
+    O --> S[AudioSession]
+    S --> E[11-band EQ]
+    E --> D[Dynamics]
+    D --> R[Protection]
+    R --> A[Browser Output]
+    S -. analyser side-chain .-> M[Meter / Spectrum]
+```
 
-1. Build the extension with `npm run build`, or extract the release ZIP.
-2. Open `chrome://extensions` in Chrome/Chromium.
-3. Enable **Developer mode**.
-4. Choose **Load unpacked** and select the built `extension/` directory (or the extracted release ZIP directory).
-5. Open a normal web tab with audio, click KopelaEQ, and enable **Audio On**.
+The runtime source is strict TypeScript. Messages entering through `chrome.runtime.onMessage` are treated as `unknown`, runtime-validated, then handled through typed exhaustive switches.
 
-Restricted browser pages such as `chrome://` pages and the Chrome Web Store cannot be captured.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the complete design.
 
 ## Permissions
 
-KopelaEQ requests only:
+KopelaEQ intentionally keeps its permission surface small:
 
-- `activeTab` — targets the tab on which the user invoked the extension;
-- `tabCapture` — obtains audio from that user-selected tab;
-- `offscreen` — hosts the Web Audio graph under Manifest V3;
-- `storage` — stores settings, presets, and popup layout.
+- `activeTab` — targets the tab on which the extension was invoked;
+- `tabCapture` — obtains audio from that selected tab;
+- `offscreen` — hosts the persistent Web Audio graph under Manifest V3;
+- `storage` — stores settings, presets and popup layout.
 
-There are no host permissions, content scripts, page injection, remote executable code, analytics, advertising SDKs, or developer-controlled network requests.
+There are **no host permissions, content scripts, page injection, analytics, advertising SDKs or developer-controlled network requests** in the extension.
+
+## Audio compatibility and QA
+
+The public 1.22.0 baseline is protected by automated regression tests, including:
+
+- exact bundled preset fixtures;
+- browser-native EQ golden responses at **44.1 kHz and 48 kHz**;
+- analyser side-chain transparency;
+- click-free bypass transitions;
+- capture lifecycle and multi-tab handling;
+- **100 sequential Start/Stop cycles**;
+- deterministic release ZIP verification.
+
+The accepted EQ response matches the frozen golden reference with **0 dB maximum difference** in the release tests.
+
+See [QA_REPORT.md](QA_REPORT.md) and [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md).
+
+## Development
+
+```text
+src/
+├── audio/        AudioSession, BypassGate, native EQ response
+├── background/   CaptureManager + MV3 service worker
+├── offscreen/    persistent audio runtime
+├── popup/        EQ editor and popup controllers
+├── shared/       state, presets, messages and constants
+└── types/        minimal Chrome API declarations
+```
+
+Before submitting a change:
+
+```bash
+npm run typecheck
+npm run qa
+```
+
+For release packaging:
+
+```bash
+npm run release
+```
+
+Release archives are deterministic and verified with SHA-256.
 
 ## Privacy
 
-Selected-tab audio is processed locally in the browser and is not intentionally recorded or uploaded by KopelaEQ. Settings and presets are stored locally through Chrome storage. See [`PRIVACY.md`](PRIVACY.md).
+Captured tab audio is processed locally in memory with Web Audio. KopelaEQ does not intentionally record, sell, share or upload that audio. Settings and presets are stored through Chrome storage.
 
-## Verification
+Read the full [Privacy Policy](PRIVACY.md).
 
-The automated suite covers TypeScript, runtime message validation, capture lifecycle, exact presets, bypass transitions, browser-native EQ golden responses, analyser transparency, Chromium UI rendering, archive policy checks, and deterministic packaging.
+## Contributing
 
-See [`QA_REPORT.md`](QA_REPORT.md) and [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md).
-
-## Security
-
-See [`SECURITY.md`](SECURITY.md) for reporting guidance. Do not post captured personal audio in public security reports.
+See [CONTRIBUTING.md](CONTRIBUTING.md). Audio topology or tuning changes must be isolated from unrelated UI/build refactors and must pass the golden-response tests.
 
 ## License
 
-No open-source license has been selected for this repository yet. Copyright remains with the maintainer unless a license is added later.
+No open-source license has been selected yet. Copyright remains with the maintainer unless a license is added later.
