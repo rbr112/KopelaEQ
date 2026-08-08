@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KopelaEQ</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div class="brand-wrap">
+        <div class="brand">KopelaEQ</div>
+        <div class="subtle">Realtime tab audio processor</div>
+      </div>
+      <div class="top-actions">
+        <button id="powerToggle" class="pill power" type="button" aria-pressed="false">
+          <span class="power-dot"></span><span class="power-label">Audio</span><span id="powerText">Off</span>
+        </button>
+      </div>
+    </header>
+
+    <section class="eq-section" aria-label="Parametric equalizer">
+      <div class="section-title-row">
+        <div>
+          <div class="eyebrow">Parametric EQ</div>
+          <div class="section-meta">11 bands · click a point for precise controls</div>
+        </div>
+        <div class="eq-toolbar">
+          <button id="analyzerToggle" class="mini-toggle" type="button" aria-pressed="true" title="Show or hide output spectrum. Spectrum uses the right-side dBFS scale; EQ uses the left-side gain scale.">Spectrum <span>On</span></button>
+          <button id="helpButton" class="help-button" type="button" aria-label="Open quick guide" title="Quick guide">?</button>
+          <button id="resetButton" class="text-button" type="button" title="Reset Gain and EQ only">Reset</button>
+        </div>
+      </div>
+
+      <div class="eq-layout">
+        <div class="gain-column">
+          <div class="gain-label">GAIN</div>
+          <output id="gainPercentReadout" class="gain-percent-readout">100%</output>
+          <output id="gainReadout" class="gain-readout">0.0 dB</output>
+          <div class="gain-slider-wrap">
+            <div class="gain-scale" aria-hidden="true">
+              <span style="top:0%">+10</span>
+              <span class="gain-zero-label" style="top:25%">0</span>
+              <span style="top:50%">−10</span>
+              <span style="top:75%">−20</span>
+              <span style="top:100%">−30</span>
+            </div>
+            <i class="gain-zero-mark" aria-hidden="true"></i>
+            <input id="gainSlider" class="gain-slider" type="range" min="-30" max="10" step="0.1" value="0" aria-label="Master gain">
+          </div>
+          <button id="gainResetButton" class="gain-reset-button" type="button" title="Set Gain to 0 dB">0 dB</button>
+        </div>
+        <div class="canvas-wrap">
+          <canvas id="eqCanvas" width="620" height="316" tabindex="0" aria-label="Parametric equalizer graph"></canvas>
+          <div id="canvasTooltip" class="canvas-tooltip" hidden></div>
+          <aside id="bandInspector" class="band-inspector" hidden aria-label="Selected EQ band">
+            <div class="band-inspector-head">
+              <div><span id="bandIndexLabel">BAND 1</span><strong id="bandTypeLabel">Low Shelf</strong></div>
+              <button id="bandInspectorClose" type="button" aria-label="Close band controls">×</button>
+            </div>
+            <div class="band-fields">
+              <label><span>Frequency</span><div class="number-field"><input id="bandFrequency" type="number" min="5" max="20000" step="1"><small>Hz</small></div></label>
+              <label><span>Gain</span><div class="number-field"><input id="bandGain" type="number" min="-30" max="30" step="0.1"><small>dB</small></div></label>
+              <label><span>Q</span><div class="number-field"><input id="bandQ" type="number" min="0.2" max="11" step="0.01"><small id="bandQUnit">Q</small></div></label>
+            </div>
+            <div class="band-inspector-meta"><span id="bandTotalReadout">Total 0.0 dB</span><span id="bandHint">Drag point · wheel changes Q</span></div>
+            <button id="bandResetButton" class="band-reset-button" type="button">Reset band</button>
+          </aside>
+        </div>
+      </div>
+    </section>
+
+    <section class="control-strip" aria-label="Audio modules">
+      <div id="presetControl" class="preset-control" title="Select a complete audio preset">
+        <span>PRESET</span>
+        <button id="presetPickerButton" class="preset-picker-button" type="button" aria-haspopup="listbox" aria-expanded="false">
+          <strong id="presetPickerText">Current settings</strong>
+        </button>
+        <div id="presetMenu" class="preset-menu" role="listbox" aria-label="Preset" hidden>
+          <div id="presetMenuList" class="preset-menu-list"></div>
+        </div>
+        <select id="presetSelect" hidden aria-hidden="true" tabindex="-1"></select>
+      </div>
+      <button id="dynamicsButton" class="module-button" type="button" title="Dynamics · optional peak and level control">Dynamics <span>Off</span></button>
+      <button id="meterButton" class="module-button" type="button" title="Meter · pre/post Protection peaks, RMS and gain reduction">Meter <span>Pre/Post</span></button>
+      <button id="protectionButton" class="module-button protection" type="button" title="Protection · final output safety stage">Protection <span>Strong</span></button>
+      <button id="moreButton" class="icon-button" type="button" aria-label="Preset actions" title="Preset actions">•••</button>
+    </section>
+
+    <footer class="statusbar">
+      <span id="statusText" role="status" aria-live="polite">Ready</span>
+      <span class="local-audio-note" title="KopelaEQ processes the selected tab audio locally in your browser and does not upload it.">Audio stays on this device</span>
+    </footer>
+  </main>
+
+  <section id="helpPanel" class="floating-panel help-panel" data-default-left="416" data-default-top="74" hidden>
+    <header class="floating-head"><span>QUICK GUIDE</span><button data-close="helpPanel" aria-label="Close">×</button></header>
+    <div class="floating-body help-body">
+      <div class="guide-row"><strong>Gain</strong><span>Input level before EQ. Percent and dB show the same setting in two forms.</span></div>
+      <div class="guide-row"><strong>EQ</strong><span>Drag a point to change frequency and gain. Click a point for precise controls. On Peak bands, mouse wheel or Shift-drag changes Q. Shelf Q is not used by Web Audio.</span></div>
+      <div class="guide-row"><strong>Dynamics</strong><span>Controls peaks and level changes. 3-band can treat lows, mids and highs separately.</span></div>
+      <div class="guide-row"><strong>Protection</strong><span>Final safety stage after the other modules. It is global and is not stored in presets.</span></div>
+      <div class="panel-note">Panel positions are only workspace layout. Dragging a panel never changes the audio signal order.</div>
+    </div>
+  </section>
+
+  <section id="presetPanel" class="floating-panel" data-default-left="414" data-default-top="320" hidden>
+    <header class="floating-head"><span>PRESET ACTIONS</span><button data-close="presetPanel" aria-label="Close">×</button></header>
+    <div class="floating-body">
+      <label class="field-label">Preset name<input id="presetName" maxlength="80" autocomplete="off" placeholder="New preset name"></label>
+      <div class="button-grid preset-primary-actions">
+        <button id="saveAsPresetButton" type="button">Save as</button>
+        <button id="updatePresetButton" type="button">Update selected</button>
+        <button id="duplicatePresetButton" type="button">Duplicate</button>
+        <button id="renamePresetButton" type="button">Rename</button>
+      </div>
+      <div class="button-grid preset-secondary-actions">
+        <button id="deletePresetButton" class="danger-button" type="button">Delete</button>
+        <button id="importPresetButton" type="button">Import</button>
+        <button id="exportPresetButton" type="button">Export</button>
+      </div>
+      <input id="importFile" type="file" accept="application/json,.json" hidden>
+      <div id="presetActionHint" class="panel-note">Presets apply the EQ curve. Gain, Dynamics, Protection and panel positions stay independent.</div>
+    </div>
+  </section>
+
+  <section id="protectionPanel" class="floating-panel compact-panel" data-default-left="472" data-default-top="110" hidden>
+    <header class="floating-head"><span>CLIP PROTECTION</span><button data-close="protectionPanel" aria-label="Close">×</button></header>
+    <div class="floating-body">
+      <div class="panel-note strong-note">Final output safety. Strong is recommended for aggressive Gain or EQ. Uses the compressor-only protection path so the new modules do not add extra saturation.</div>
+      <div id="protectionOptions" class="segmented vertical">
+        <button data-protection="strong" type="button">Strong</button>
+        <button data-protection="medium" type="button">Medium</button>
+        <button data-protection="light" type="button">Light</button>
+        <button data-protection="off" type="button">Off</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="dynamicsPanel" class="floating-panel" data-default-left="322" data-default-top="54" hidden>
+    <header class="floating-head"><span>DYNAMICS</span><button data-close="dynamicsPanel" aria-label="Close">×</button></header>
+    <div class="floating-body">
+      <div class="row-between"><div><span class="field-title">Processing</span><div class="field-subtitle">Optional peak and level control</div></div><label class="switch"><input id="dynamicsEnabled" type="checkbox"><span></span></label></div>
+      <div class="segmented"><button id="normalModeButton" type="button">Normal</button><button id="multibandModeButton" type="button">3-band</button></div>
+      <label class="slider-field"><span>Amount <output id="dynamicsAmountReadout">35%</output></span><input id="dynamicsAmount" type="range" min="0" max="100" step="1"><small>How strongly the dynamics stage reacts.</small></label>
+      <label class="slider-field"><span>Response <output id="dynamicsResponseReadout">50%</output></span><input id="dynamicsResponse" type="range" min="0" max="100" step="1"><small>Faster values follow short peaks more closely.</small></label>
+      <button id="dynamicsAdvancedToggle" class="advanced-toggle" type="button" aria-expanded="false">Advanced <span>▾</span></button>
+      <div id="dynamicsAdvancedBody" class="advanced-body" hidden>
+        <div class="advanced-label">Base compressor</div>
+        <div class="parameter-grid" aria-label="Derived compressor parameters">
+          <div><span>Threshold</span><output id="dynThresholdReadout">−16.4 dB</output></div>
+          <div><span>Ratio</span><output id="dynRatioReadout">3.5:1</output></div>
+          <div><span>Attack</span><output id="dynAttackReadout">20.5 ms</output></div>
+          <div><span>Release</span><output id="dynReleaseReadout">260 ms</output></div>
+        </div>
+        <div id="crossoverFields" class="crossover-fields">
+          <div class="advanced-label">3-band crossovers</div>
+          <label class="slider-field"><span>Low split <output id="lowCrossoverReadout">180 Hz</output></span><input id="lowCrossover" type="range" min="80" max="800" step="5"></label>
+          <label class="slider-field"><span>High split <output id="highCrossoverReadout">4.5 kHz</output></span><input id="highCrossover" type="range" min="1200" max="12000" step="50"></label>
+          <div class="panel-note">3-band uses the base settings per band with small low/high timing adaptations. Crossovers do not affect Normal mode.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="meterPanel" class="floating-panel meter-panel" data-default-left="390" data-default-top="86" hidden>
+    <header class="floating-head">
+      <span>METER</span>
+      <div class="floating-head-actions"><button id="meterHoldReset" type="button" aria-label="Reset peak hold" title="Reset peak hold">↺</button><button data-close="meterPanel" aria-label="Close">×</button></div>
+    </header>
+    <div class="floating-body meter-body">
+      <div id="protectionActivity" class="protection-activity" data-state="bypassed"><span class="activity-dot"></span><strong>Protection bypassed</strong><output id="protectionActivityValue">0.0 dB</output></div>
+
+      <div class="meter-stage-grid">
+        <section class="meter-stage" aria-label="Pre Protection level">
+          <div class="meter-stage-head"><span>PRE PROTECTION</span><output id="preClipState" class="meter-status" data-level="safe">SAFE</output></div>
+          <div class="meter-row"><span>Peak L</span><div class="meter-track"><i id="preLeftBar"></i></div><output id="preLeftValue">−∞</output></div>
+          <div class="meter-row"><span>Peak R</span><div class="meter-track"><i id="preRightBar"></i></div><output id="preRightValue">−∞</output></div>
+          <div class="meter-row compact"><span>RMS</span><div class="meter-track subtle-track"><i id="preRmsBar"></i></div><output id="preRmsValue">−∞</output></div>
+          <div class="meter-hold"><span>Peak hold</span><output id="preHoldValue">−∞</output></div>
+        </section>
+
+        <section class="meter-stage" aria-label="Post Protection level">
+          <div class="meter-stage-head"><span>POST PROTECTION</span><output id="postClipState" class="meter-status" data-level="safe">SAFE</output></div>
+          <div class="meter-row"><span>Peak L</span><div class="meter-track"><i id="postLeftBar"></i></div><output id="postLeftValue">−∞</output></div>
+          <div class="meter-row"><span>Peak R</span><div class="meter-track"><i id="postRightBar"></i></div><output id="postRightValue">−∞</output></div>
+          <div class="meter-row compact"><span>RMS</span><div class="meter-track subtle-track"><i id="postRmsBar"></i></div><output id="postRmsValue">−∞</output></div>
+          <div class="meter-hold"><span>Peak hold</span><output id="postHoldValue">−∞</output></div>
+        </section>
+      </div>
+
+      <div class="meter-row gr-row"><span>Protection GR</span><div class="meter-track reverse"><i id="grBar"></i></div><output id="grValue">0.0</output></div>
+      <div class="meter-row gr-row"><span>Dynamics GR</span><div class="meter-track reverse"><i id="dynGrBar"></i></div><output id="dynGrValue">0.0</output></div>
+
+      <div class="meter-divider"></div>
+      <div class="spectrum-controls">
+        <div class="meter-stage-head"><span>SPECTRUM RESPONSE</span><button id="spectrumFreezeButton" class="meter-mini-button" type="button" aria-pressed="false">Freeze</button></div>
+        <div id="spectrumModeOptions" class="segmented spectrum-mode" aria-label="Spectrum response speed">
+          <button type="button" data-spectrum-mode="fast">Fast</button>
+          <button type="button" data-spectrum-mode="balanced">Balanced</button>
+          <button type="button" data-spectrum-mode="smooth">Smooth</button>
+        </div>
+      </div>
+      <div class="panel-note">Pre shows the signal entering Protection. Post is the final output. Peak is sample-peak, not inter-sample true peak. Metering remains side-chain only and disconnects when unused.</div>
+    </div>
+  </section>
+
+  <script type="module" src="js/popup/index.js"></script>
+</body>
+</html>

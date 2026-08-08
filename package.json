@@ -1,0 +1,19 @@
+{
+  "name": "kopelaeq",
+  "version": "1.22.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "node scripts/build.mjs",
+    "build:fallback": "node scripts/build-fallback.mjs",
+    "qa": "bash scripts/run_qa.sh",
+    "release": "bash scripts/release.sh"
+  },
+  "devDependencies": {
+    "typescript": "5.8.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
