@@ -39,6 +39,9 @@ const captures = new CaptureManager({
   getProtection: () => protection
 });
 
+const captureReady = stateReady.then(() => captures.reconcileExistingCaptures())
+  .catch((error: unknown) => console.warn('KopelaEQ capture reconciliation:', error));
+
 function stringRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? { ...(value as Record<string, unknown>) }
@@ -139,6 +142,9 @@ async function handleMessage(message: BackgroundMessage, sender: ChromeMessageSe
     case MessageType.SessionEnded:
       captures.onSessionEnded(message.tabId);
       return { ok: true };
+    case MessageType.SessionHealthChanged:
+      captures.onSessionHealthChanged(message.tabId, message.trackMuted, message.trackReadyState, message.contextState);
+      return { ok: true };
     default:
       return assertNever(message);
   }
@@ -154,6 +160,7 @@ chrome.runtime.onMessage.addListener((rawMessage: unknown, sender: ChromeMessage
 
   void (async () => {
     await stateReady;
+    await captureReady;
     return handleMessage(message, sender);
   })().then(sendResponse).catch((error: unknown) => {
     console.error('KopelaEQ background error:', error);
@@ -166,6 +173,10 @@ chrome.runtime.onMessage.addListener((rawMessage: unknown, sender: ChromeMessage
 chrome.tabs.onRemoved.addListener((tabId: number) => {
   void captures.stopCapture(tabId).catch(() => undefined);
   void clearSelectedPresetForTab(tabId).catch(() => undefined);
+});
+
+chrome.tabs.onUpdated.addListener((tabId: number, changeInfo: ChromeTabUpdateInfo) => {
+  if (typeof changeInfo.audible === 'boolean') captures.onTabAudibleChanged(tabId, changeInfo.audible);
 });
 
 if (chrome.tabCapture?.onStatusChanged) {
