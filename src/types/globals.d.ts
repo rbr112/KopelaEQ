@@ -2,6 +2,7 @@ interface ChromeTab {
   id?: number;
   url?: string;
   active?: boolean;
+  audible?: boolean;
   windowId?: number;
 }
 
@@ -49,9 +50,20 @@ interface ChromeTabsRemovedEvent {
   addListener(callback: (tabId: number, removeInfo?: unknown) => void): void;
 }
 
+interface ChromeTabUpdateInfo {
+  audible?: boolean;
+  status?: 'loading' | 'complete';
+}
+
+interface ChromeTabsUpdatedEvent {
+  addListener(callback: (tabId: number, changeInfo: ChromeTabUpdateInfo, tab: ChromeTab) => void): void;
+}
+
 interface ChromeTabsApi {
   query(queryInfo: { active?: boolean; currentWindow?: boolean }): Promise<ChromeTab[]>;
+  get(tabId: number): Promise<ChromeTab>;
   onRemoved: ChromeTabsRemovedEvent;
+  onUpdated: ChromeTabsUpdatedEvent;
 }
 
 type ChromeTabCaptureState = 'pending' | 'active' | 'stopped' | 'error';

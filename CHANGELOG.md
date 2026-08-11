@@ -2,6 +2,17 @@
 
 All notable public KopelaEQ changes are summarized here. Detailed historical release notes may exist in older project archives.
 
+## 1.22.1 — 2026-08-11
+
+### Capture reliability
+
+- Added health-aware recovery for tab audio across media-source transitions.
+- Uses `Tab.audible` + track mute state so pause/silence does not trigger recapture.
+- Automatically resumes suspended AudioContext instances.
+- Recovers ended/error/orphaned capture sessions while preserving manual Stop semantics.
+- Removed redundant status polling from the meter path.
+- Added regression coverage for short mute/unmute transitions and persistent audible+muted capture.
+
 ## 1.22.0 — 2026-08-08
 
 ### Release hardening

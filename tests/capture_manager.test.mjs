@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import * as S from '../extension/js/shared/index.js';
 
 let offscreenOpen=false, streamIdCalls=0, failActiveOnce=false, deferStreamId=false, deferredResolve=null;
+const tabAudible=new Map();
 const captured=new Map();
 const sessions=new Map();
 let protection='strong';
@@ -16,10 +17,10 @@ const chromeMock={
     async sendMessage(msg){
       if(msg.type===S.MessageType.SessionStatus){
         const sess=sessions.get(Number(msg.tabId));
-        return {ok:true,active:Boolean(sess),activeTabs:[...sessions.keys()],pendingTabs:[],state:sess?.state||null,protection:sess?.protection||protection,sampleRate:sess?44100:null};
+        return {ok:true,active:Boolean(sess),activeTabs:[...sessions.keys()],pendingTabs:[],state:sess?.state||null,protection:sess?.protection||protection,sampleRate:sess?44100:null,trackReadyState:sess?.trackReadyState??null,trackMuted:sess?.trackMuted??null,trackEnabled:sess?.trackEnabled??null,contextState:sess?.contextState??null};
       }
       if(msg.type===S.MessageType.CaptureStart){
-        const tab=Number(msg.tabId); sessions.set(tab,{state:S.normalizeAudioState(msg.state),protection:msg.protection}); captured.set(tab,'active'); return {ok:true};
+        const tab=Number(msg.tabId); sessions.set(tab,{state:S.normalizeAudioState(msg.state),protection:msg.protection,trackReadyState:'live',trackMuted:false,trackEnabled:true,contextState:'running'}); captured.set(tab,'active'); return {ok:true};
       }
       if(msg.type===S.MessageType.CaptureStop){ const tab=Number(msg.tabId); sessions.delete(tab); captured.delete(tab); return {ok:true}; }
       if(msg.type===S.MessageType.StateSet){ const sess=sessions.get(Number(msg.tabId)); if(sess)sess.state=S.normalizeAudioState(msg.state); return {ok:true,active:Boolean(sess)}; }
@@ -28,6 +29,7 @@ const chromeMock={
       return {ok:false,error:'unknown'};
     }
   },
+  tabs:{async get(tabId){return {id:Number(tabId),audible:tabAudible.get(Number(tabId))===true};}},
   tabCapture:{
     async getCapturedTabs(){return [...captured.entries()].map(([tabId,status])=>({tabId,status}));},
     async getMediaStreamId({targetTabId}){
@@ -77,4 +79,40 @@ assert.equal(sessions.has(901),true); assert.equal(sessions.has(902),true);
 await Promise.all([manager2.stopCapture(901),manager2.stopCapture(902)]);
 assert.equal(captured.has(901),false); assert.equal(captured.has(902),false);
 assert.equal(sessions.size,0);
+
+
+// Media transitions: a muted capture is not automatically treated as broken.
+await manager2.startCapture(50);
+let baselineCalls=streamIdCalls;
+tabAudible.set(50,false);
+sessions.get(50).trackMuted=true;
+manager2.onSessionHealthChanged(50,true,'live','running');
+await new Promise(r=>setTimeout(r,850));
+assert.equal(streamIdCalls,baselineCalls,'paused/non-audible tab must not be recaptured');
+
+// A short mute while an audible tab swaps media is tolerated if unmute arrives inside the grace window.
+tabAudible.set(50,true);
+sessions.get(50).trackMuted=true;
+manager2.onSessionHealthChanged(50,true,'live','running');
+setTimeout(()=>{ const sess=sessions.get(50); if(sess)sess.trackMuted=false; manager2.onSessionHealthChanged(50,false,'live','running'); },120);
+await new Promise(r=>setTimeout(r,850));
+assert.equal(streamIdCalls,baselineCalls,'brief mute/unmute must not restart capture');
+
+// If Chrome still reports the tab as audible while the captured track remains muted,
+// the session is inconsistent and a controlled recapture is justified.
+sessions.get(50).trackMuted=true;
+manager2.onTabAudibleChanged(50,true);
+await new Promise(r=>setTimeout(r,1150));
+assert.ok(streamIdCalls>baselineCalls,'audible + persistently muted capture should recover');
+assert.equal(sessions.get(50).trackMuted,false);
+await manager2.stopCapture(50);
+
+// A definitively ended track is always recoverable while user intent is still ON.
+await manager2.startCapture(51);
+baselineCalls=streamIdCalls;
+manager2.onSessionHealthChanged(51,false,'ended','running');
+await new Promise(r=>setTimeout(r,500));
+assert.ok(streamIdCalls>baselineCalls,'ended track should trigger controlled recovery');
+await manager2.stopCapture(51);
+
 console.log('capture_manager.test.mjs: PASS');

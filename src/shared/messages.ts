@@ -10,6 +10,7 @@ export const MessageType = Object.freeze({
   PresetSelectionSet: 'PRESET_SELECTION_SET',
   MeterGet: 'METER_GET',
   SessionEnded: 'SESSION_ENDED',
+  SessionHealthChanged: 'SESSION_HEALTH_CHANGED',
   SessionStatus: 'SESSION_STATUS'
 } as const);
 
@@ -24,7 +25,8 @@ export type BackgroundMessage =
   | { type: typeof MessageType.PresetSelectionGet; tabId?: number | null }
   | { type: typeof MessageType.PresetSelectionSet; tabId?: number | null; name: unknown }
   | { type: typeof MessageType.MeterGet; tabId?: number | null; spectrum?: boolean; spectrumMode?: SpectrumMode; levels?: boolean }
-  | { type: typeof MessageType.SessionEnded; tabId: number };
+  | { type: typeof MessageType.SessionEnded; tabId: number; reason?: string }
+  | { type: typeof MessageType.SessionHealthChanged; tabId: number; trackMuted: boolean; trackReadyState?: MediaStreamTrackState | null; contextState?: AudioContextState | null };
 
 export type OffscreenMessage =
   | { target: 'offscreen'; type: typeof MessageType.CaptureStart; tabId: number; streamId: string; state: AudioState; protection: ProtectionMode }
@@ -41,10 +43,14 @@ export interface CaptureResponse extends BaseResponse { active?: boolean; pendin
 export interface StatusResponse extends BaseResponse {
   active?: boolean;
   pending?: boolean;
-  phase?: 'idle' | 'starting' | 'active' | 'stopping';
+  phase?: 'idle' | 'starting' | 'active' | 'stopping' | 'recovering';
   state?: AudioState | null;
   protection?: ProtectionMode;
   sampleRate?: number | null;
+  trackReadyState?: MediaStreamTrackState | null;
+  trackMuted?: boolean | null;
+  trackEnabled?: boolean | null;
+  contextState?: AudioContextState | null;
 }
 export interface PresetSelectionResponse extends BaseResponse { name?: string; presetSelection?: string; }
 export interface MeterResponse extends BaseResponse { active?: boolean; meter?: MeterSnapshot | null; }
@@ -55,6 +61,10 @@ export interface SessionStatusResponse extends BaseResponse {
   state?: AudioState | null;
   protection?: ProtectionMode;
   sampleRate?: number | null;
+  trackReadyState?: MediaStreamTrackState | null;
+  trackMuted?: boolean | null;
+  trackEnabled?: boolean | null;
+  contextState?: AudioContextState | null;
 }
 
 export type ResponseFor<M extends BackgroundMessage> =
@@ -108,7 +118,14 @@ export function parseBackgroundMessage(input: unknown): BackgroundMessage | null
     case MessageType.MeterGet:
       return validMeterOptions(input) ? input as BackgroundMessage : null;
     case MessageType.SessionEnded:
-      return Number.isInteger(Number(input.tabId)) ? input as BackgroundMessage : null;
+      if (!Number.isInteger(Number(input.tabId))) return null;
+      if (input.reason !== undefined && typeof input.reason !== 'string') return null;
+      return input as BackgroundMessage;
+    case MessageType.SessionHealthChanged:
+      if (!Number.isInteger(Number(input.tabId)) || typeof input.trackMuted !== 'boolean') return null;
+      if (input.trackReadyState !== undefined && input.trackReadyState !== null && input.trackReadyState !== 'live' && input.trackReadyState !== 'ended') return null;
+      if (input.contextState !== undefined && input.contextState !== null && !['running','suspended','closed','interrupted'].includes(String(input.contextState))) return null;
+      return input as BackgroundMessage;
     default:
       return null;
   }

@@ -357,7 +357,10 @@ async function refreshCaptureStatus(): Promise<void> {
   protection = S.normalizeProtection(result.protection || protection);
   if (setEngineSampleRate(result.sampleRate)) queueDraw();
   updateControlState();
-  if (captureActive) setStatus('Processing current tab');
+  if (result.phase === 'recovering') setStatus('Reconnecting audio…');
+  else if (captureActive && result.trackMuted === true) setStatus('Waiting for tab audio…');
+  else if (captureActive) setStatus('Processing current tab');
+  else if (!capturePending) setStatus('Processing stopped');
 }
 
 async function toggleCapture(): Promise<void> {
@@ -1135,14 +1138,15 @@ function bindRuntimeStatusEvents(): void {
     const tabId = Number(record.tabId);
     if (Number.isInteger(tabId) && tabId === activeTabId) {
       captureActive = false;
-      capturePending = false;
+      capturePending = true;
       lastMeter = null;
       lastSpectrum = null;
       resetPeakHold();
       updateControlState();
       updateMeterUi();
-      setStatus('Processing stopped');
+      setStatus('Reconnecting audio…');
       queueDraw();
+      setTimeout(() => { void refreshCaptureStatus().catch(() => undefined); }, 180);
     }
     return false;
   });
