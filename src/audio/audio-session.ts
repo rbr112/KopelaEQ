@@ -10,8 +10,16 @@ interface DynamicsBand {
   compressor: DynamicsCompressorNode;
 }
 
+export interface AudioSessionHealth {
+  trackReadyState: MediaStreamTrackState | null;
+  trackMuted: boolean;
+  trackEnabled: boolean;
+  contextState: AudioContextState;
+}
+
 export interface AudioSessionOptions {
   onEnded?: (tabId: number) => void | Promise<void>;
+  onHealthChange?: (tabId: number, health: AudioSessionHealth) => void | Promise<void>;
 }
 
 export function safeDisconnect(node: AudioNode | null | undefined, destination?: AudioNode): void {
@@ -107,6 +115,8 @@ export class AudioSession {
   private readonly rightTimeData: Float32Array;
   private freqData: Float32Array;
   private readonly onEnded?: (tabId: number) => void | Promise<void>;
+  private readonly onHealthChange?: (tabId: number, health: AudioSessionHealth) => void | Promise<void>;
+  private readonly audioTrack: MediaStreamTrack | null;
 
   constructor(context: AudioContext, tabId: number, stream: MediaStream, state: unknown, protection: unknown, options: AudioSessionOptions = {}) {
     this.context = context;
@@ -115,6 +125,8 @@ export class AudioSession {
     this.state = normalizeAudioState(state);
     this.protection = normalizeProtection(protection);
     this.onEnded = options.onEnded;
+    this.onHealthChange = options.onHealthChange;
+    this.audioTrack = stream.getAudioTracks()[0] ?? null;
 
     this.source = context.createMediaStreamSource(stream);
     this.inputGain = context.createGain();
@@ -174,9 +186,26 @@ export class AudioSession {
     this.applyState(this.state, true);
     this.applyProtection(this.protection, true);
 
-    for (const track of stream.getAudioTracks()) {
-      track.addEventListener('ended', () => { void this.handleEnded(); }, { once: true });
+    if (this.audioTrack) {
+      this.audioTrack.addEventListener('ended', () => { void this.handleEnded(); }, { once: true });
+      this.audioTrack.addEventListener('mute', () => { void this.emitHealthChange(); });
+      this.audioTrack.addEventListener('unmute', () => { void this.emitHealthChange(); });
     }
+  }
+
+
+  health(): AudioSessionHealth {
+    return {
+      trackReadyState: this.audioTrack?.readyState ?? null,
+      trackMuted: Boolean(this.audioTrack?.muted),
+      trackEnabled: this.audioTrack ? this.audioTrack.enabled !== false : false,
+      contextState: this.context.state
+    };
+  }
+
+  private async emitHealthChange(): Promise<void> {
+    if (this.disposed) return;
+    await this.onHealthChange?.(this.tabId, this.health());
   }
 
   private createBand(name: 'low' | 'mid' | 'high'): DynamicsBand {

@@ -2,7 +2,7 @@ import { MessageType, normalizeAudioState, normalizeProtection } from '../shared
 import type { AudioState, ProtectionMode, SpectrumMode } from '../shared/types.js';
 import type { SessionStatusResponse, StatusResponse } from '../shared/messages.js';
 
-export type CapturePhase = 'idle' | 'starting' | 'active' | 'stopping';
+export type CapturePhase = 'idle' | 'starting' | 'active' | 'stopping' | 'recovering';
 
 export interface CaptureManagerStateProvider {
   getAudioState(): AudioState;
@@ -14,6 +14,9 @@ interface CapturedTabInfo {
   status: 'pending' | 'active' | 'stopped' | 'error' | string;
 }
 
+const AUDIBLE_MUTE_GRACE_MS = 700;
+const RECOVERY_COOLDOWN_MS = 1800;
+
 function validTabId(value: unknown): number | null {
   if (value === null || value === undefined || value === '') return null;
   const n = Number(value);
@@ -24,16 +27,20 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-
 function responseRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
 }
+
 export class CaptureManager {
   private readonly offscreenUrl = 'offscreen.html';
   private readonly tabQueues = new Map<number, Promise<unknown>>();
   private readonly tabPhases = new Map<number, CapturePhase>();
+  private readonly desiredTabs = new Set<number>();
+  private readonly healthProbeGeneration = new Map<number, number>();
+  private readonly recoveryInFlight = new Map<number, Promise<void>>();
+  private readonly recoveryCooldownUntil = new Map<number, number>();
   private offscreenCreating: Promise<void> | null = null;
 
   constructor(private readonly stateProvider: CaptureManagerStateProvider) {}
@@ -43,6 +50,15 @@ export class CaptureManager {
   private setPhase(tabId: number, phase: CapturePhase): void {
     if (phase === 'idle') this.tabPhases.delete(tabId);
     else this.tabPhases.set(tabId, phase);
+  }
+
+  private setDesired(tabId: number, desired: boolean): void {
+    if (desired) this.desiredTabs.add(tabId);
+    else this.desiredTabs.delete(tabId);
+  }
+
+  private invalidateHealthProbe(tabId: number): void {
+    this.healthProbeGeneration.set(tabId, (this.healthProbeGeneration.get(tabId) || 0) + 1);
   }
 
   private enqueueTabOperation<T>(tabId: number, operation: () => Promise<T>): Promise<T> {
@@ -82,7 +98,18 @@ export class CaptureManager {
 
   async queryOffscreenStatus(tabId: number | null = null): Promise<SessionStatusResponse | null> {
     if (!(await this.hasOffscreenDocument())) {
-      return { ok: true, active: false, activeTabs: [], pendingTabs: [], state: null, protection: this.stateProvider.getProtection() };
+      return {
+        ok: true,
+        active: false,
+        activeTabs: [],
+        pendingTabs: [],
+        state: null,
+        protection: this.stateProvider.getProtection(),
+        trackReadyState: null,
+        trackMuted: null,
+        trackEnabled: null,
+        contextState: null
+      };
     }
     try {
       const payload: Record<string, unknown> = { target: 'offscreen', type: MessageType.SessionStatus };
@@ -104,6 +131,14 @@ export class CaptureManager {
     }
   }
 
+  private remoteSessionHealthy(remote: SessionStatusResponse | null): boolean {
+    if (!remote?.active) return false;
+    if (remote.trackReadyState === 'ended') return false;
+    if (remote.trackEnabled === false) return false;
+    if (remote.contextState === 'closed') return false;
+    return true;
+  }
+
   private async capturedTabs(): Promise<CapturedTabInfo[]> {
     if (!chrome.tabCapture || typeof chrome.tabCapture.getCapturedTabs !== 'function') return [];
     try {
@@ -117,6 +152,16 @@ export class CaptureManager {
   private async capturedInfo(tabId: number): Promise<CapturedTabInfo | null> {
     const list = await this.capturedTabs();
     return list.find((item) => Number(item?.tabId) === tabId) || null;
+  }
+
+  private async tabAudible(tabId: number): Promise<boolean | null> {
+    if (!chrome.tabs || typeof chrome.tabs.get !== 'function') return null;
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      return typeof tab?.audible === 'boolean' ? tab.audible : null;
+    } catch {
+      return null;
+    }
   }
 
   private async waitForCaptureRelease(tabId: number, timeoutMs = 3000): Promise<boolean> {
@@ -134,7 +179,7 @@ export class CaptureManager {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       const status = await this.queryOffscreenStatus(tabId);
-      if (status?.active) return status;
+      if (this.remoteSessionHealthy(status)) return status;
       const pending = Boolean(status && Array.isArray(status.pendingTabs) && status.pendingTabs.map(Number).includes(tabId));
       if (!pending) return status;
       await delay(50);
@@ -160,7 +205,7 @@ export class CaptureManager {
       if (!/active stream|already.*captur|cannot capture/i.test(text)) throw error;
 
       const remote = await this.queryOffscreenStatus(tabId);
-      if (remote?.active) return { alreadyActive: true, state: remote.state };
+      if (this.remoteSessionHealthy(remote)) return { alreadyActive: true, state: remote?.state };
 
       if (await this.waitForCaptureRelease(tabId, 3000)) {
         return { streamId: await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }) };
@@ -171,18 +216,29 @@ export class CaptureManager {
     }
   }
 
+  private async stopRemoteSessionForRestart(tabId: number): Promise<void> {
+    if (!(await this.hasOffscreenDocument())) return;
+    try { await chrome.runtime.sendMessage({ target: 'offscreen', type: MessageType.CaptureStop, tabId }); } catch { /* already gone */ }
+  }
+
   private async startCaptureInternal(tabId: number): Promise<Record<string, unknown>> {
     this.setPhase(tabId, 'starting');
     try {
       let remote = await this.queryOffscreenStatus(tabId);
-      if (remote?.active) {
+      if (this.remoteSessionHealthy(remote)) {
         this.setPhase(tabId, 'active');
         return { ok: true, active: true, alreadyActive: true };
       }
 
+      if (remote?.active && !this.remoteSessionHealthy(remote)) {
+        await this.stopRemoteSessionForRestart(tabId);
+        await this.waitForCaptureRelease(tabId, 3000);
+        remote = await this.queryOffscreenStatus(tabId);
+      }
+
       if (remote && Array.isArray(remote.pendingTabs) && remote.pendingTabs.map(Number).includes(tabId)) {
         remote = await this.waitForOffscreenPending(tabId);
-        if (remote?.active) {
+        if (this.remoteSessionHealthy(remote)) {
           this.setPhase(tabId, 'active');
           return { ok: true, active: true, alreadyActive: true };
         }
@@ -215,6 +271,7 @@ export class CaptureManager {
       }));
       if (result.ok !== true) throw new Error(typeof result.error === 'string' ? result.error : 'Audio engine did not start.');
       this.setPhase(tabId, 'active');
+      this.recoveryCooldownUntil.delete(tabId);
       return { ok: true, active: true, alreadyActive: result.alreadyActive === true };
     } catch (error) {
       this.setPhase(tabId, 'idle');
@@ -226,9 +283,7 @@ export class CaptureManager {
   private async stopCaptureInternal(tabId: number): Promise<Record<string, unknown>> {
     this.setPhase(tabId, 'stopping');
     try {
-      if (await this.hasOffscreenDocument()) {
-        try { await chrome.runtime.sendMessage({ target: 'offscreen', type: MessageType.CaptureStop, tabId }); } catch { /* already gone */ }
-      }
+      await this.stopRemoteSessionForRestart(tabId);
       const released = await this.waitForCaptureRelease(tabId, 3000);
       this.setPhase(tabId, released ? 'idle' : 'stopping');
       if (released) await this.maybeCloseOffscreen();
@@ -239,15 +294,79 @@ export class CaptureManager {
     }
   }
 
+  private scheduleRecovery(tabId: number, reason: string): void {
+    if (!this.desiredTabs.has(tabId) || this.recoveryInFlight.has(tabId)) return;
+    const cooldownUntil = this.recoveryCooldownUntil.get(tabId) || 0;
+    if (Date.now() < cooldownUntil) return;
+
+    const task = this.enqueueTabOperation(tabId, async () => {
+      if (!this.desiredTabs.has(tabId)) return;
+      this.setPhase(tabId, 'recovering');
+      this.invalidateHealthProbe(tabId);
+      try {
+        await this.stopRemoteSessionForRestart(tabId);
+        const released = await this.waitForCaptureRelease(tabId, 3500);
+        if (!this.desiredTabs.has(tabId)) return;
+        if (!released) throw new Error(`Capture recovery (${reason}) could not release the previous stream.`);
+        await delay(120);
+        if (!this.desiredTabs.has(tabId)) return;
+        await this.startCaptureInternal(tabId);
+      } catch (error) {
+        this.recoveryCooldownUntil.set(tabId, Date.now() + RECOVERY_COOLDOWN_MS);
+        if (this.desiredTabs.has(tabId)) this.setPhase(tabId, 'idle');
+        console.warn('KopelaEQ capture recovery failed:', reason, error);
+      }
+    }).then(() => undefined, () => undefined).finally(() => {
+      if (this.recoveryInFlight.get(tabId) === task) this.recoveryInFlight.delete(tabId);
+    });
+    this.recoveryInFlight.set(tabId, task);
+  }
+
+  private async probeHealthWhileAudible(tabId: number): Promise<void> {
+    if (!this.desiredTabs.has(tabId)) return;
+    const token = (this.healthProbeGeneration.get(tabId) || 0) + 1;
+    this.healthProbeGeneration.set(tabId, token);
+
+    const first = await this.queryOffscreenStatus(tabId);
+    if (!this.desiredTabs.has(tabId) || this.healthProbeGeneration.get(tabId) !== token) return;
+    if (!first?.active || first.trackReadyState === 'ended' || first.trackEnabled === false || first.contextState === 'closed') {
+      this.scheduleRecovery(tabId, 'unhealthy-session');
+      return;
+    }
+    if (first.trackMuted !== true) return;
+
+    // A brief mute is normal while a media source swaps. Only recover when Chrome
+    // still says the tab is producing audio and the captured track remains muted.
+    await delay(AUDIBLE_MUTE_GRACE_MS);
+    if (!this.desiredTabs.has(tabId) || this.healthProbeGeneration.get(tabId) !== token) return;
+    const audible = await this.tabAudible(tabId);
+    if (audible !== true) return;
+    const second = await this.queryOffscreenStatus(tabId);
+    if (!this.desiredTabs.has(tabId) || this.healthProbeGeneration.get(tabId) !== token) return;
+    if (!second?.active || second.trackReadyState === 'ended' || second.trackEnabled === false || second.contextState === 'closed') {
+      this.scheduleRecovery(tabId, 'unhealthy-session');
+      return;
+    }
+    if (second.trackMuted === true) this.scheduleRecovery(tabId, 'audible-tab-muted-capture');
+  }
+
   startCapture(tabIdValue: unknown): Promise<Record<string, unknown>> {
     const tabId = validTabId(tabIdValue);
     if (tabId === null) return Promise.reject(new Error('Invalid tab id.'));
-    return this.enqueueTabOperation(tabId, () => this.startCaptureInternal(tabId));
+    this.setDesired(tabId, true);
+    this.invalidateHealthProbe(tabId);
+    return this.enqueueTabOperation(tabId, () => this.startCaptureInternal(tabId)).catch((error) => {
+      this.setDesired(tabId, false);
+      throw error;
+    });
   }
 
   stopCapture(tabIdValue: unknown): Promise<Record<string, unknown>> {
     const tabId = validTabId(tabIdValue);
     if (tabId === null) return Promise.resolve({ ok: true, active: false });
+    this.setDesired(tabId, false);
+    this.invalidateHealthProbe(tabId);
+    this.recoveryCooldownUntil.delete(tabId);
     return this.enqueueTabOperation(tabId, () => this.stopCaptureInternal(tabId));
   }
 
@@ -269,9 +388,11 @@ export class CaptureManager {
   async meter(tabIdValue: unknown, spectrum: boolean, spectrumMode: SpectrumMode = 'balanced', levels = true): Promise<Record<string, unknown>> {
     const tabId = validTabId(tabIdValue);
     if (tabId === null || !(await this.hasOffscreenDocument())) return { ok: true, active: false, meter: null };
-    const remote = await this.queryOffscreenStatus(tabId);
-    if (!remote?.active) return { ok: true, active: false, meter: null };
-    return responseRecord(await chrome.runtime.sendMessage({ target: 'offscreen', type: MessageType.MeterGet, tabId, spectrum, spectrumMode, levels }));
+    try {
+      return responseRecord(await chrome.runtime.sendMessage({ target: 'offscreen', type: MessageType.MeterGet, tabId, spectrum, spectrumMode, levels }));
+    } catch {
+      return { ok: true, active: false, meter: null };
+    }
   }
 
   async statusForTab(tabIdValue: unknown): Promise<StatusResponse> {
@@ -284,31 +405,84 @@ export class CaptureManager {
     const browserPending = Boolean(info && info.status === 'pending');
     const stopping = phase === 'stopping' && Boolean(info && info.status === 'active');
     const active = Boolean(remote?.active);
-    if (active) this.setPhase(tabId, 'active');
-    else if (!remotePending && !browserPending && !stopping && phase !== 'starting') this.setPhase(tabId, 'idle');
+    if (active) {
+      if (phase !== 'stopping' && phase !== 'recovering') this.setPhase(tabId, 'active');
+    } else if (!remotePending && !browserPending && !stopping && phase !== 'starting' && phase !== 'recovering') {
+      this.setPhase(tabId, 'idle');
+    }
     return {
       ok: true,
       active,
-      pending: this.phaseFor(tabId) === 'starting' || this.phaseFor(tabId) === 'stopping' || remotePending || browserPending,
+      pending: ['starting','stopping','recovering'].includes(this.phaseFor(tabId)) || remotePending || browserPending,
       phase: this.phaseFor(tabId),
       state: active && remote?.state ? normalizeAudioState(remote.state) : this.stateProvider.getAudioState(),
       protection: this.stateProvider.getProtection(),
-      sampleRate: remote && Number.isFinite(Number(remote.sampleRate)) ? Number(remote.sampleRate) : null
+      sampleRate: remote && Number.isFinite(Number(remote.sampleRate)) ? Number(remote.sampleRate) : null,
+      trackReadyState: remote?.trackReadyState ?? null,
+      trackMuted: remote?.trackMuted ?? null,
+      trackEnabled: remote?.trackEnabled ?? null,
+      contextState: remote?.contextState ?? null
     };
+  }
+
+  async reconcileExistingCaptures(): Promise<void> {
+    const remote = await this.queryOffscreenStatus();
+    const remoteTabs = new Set((remote?.activeTabs || []).map(Number).filter(Number.isInteger));
+    for (const tabId of remoteTabs) {
+      this.setDesired(tabId, true);
+      this.setPhase(tabId, 'active');
+    }
+    const browserCaptures = await this.capturedTabs();
+    for (const info of browserCaptures) {
+      if (!info || !Number.isInteger(info.tabId) || info.status === 'stopped' || info.status === 'error') continue;
+      this.setDesired(info.tabId, true);
+      if (!remoteTabs.has(info.tabId) && info.status === 'active') this.scheduleRecovery(info.tabId, 'orphan-browser-capture');
+    }
   }
 
   onSessionEnded(tabIdValue: unknown): void {
     const tabId = validTabId(tabIdValue);
-    if (tabId !== null) this.setPhase(tabId, 'idle');
-    void this.maybeCloseOffscreen();
+    if (tabId === null) return;
+    this.setPhase(tabId, 'idle');
+    this.invalidateHealthProbe(tabId);
+    if (this.desiredTabs.has(tabId)) this.scheduleRecovery(tabId, 'media-track-ended');
+    else void this.maybeCloseOffscreen();
+  }
+
+  onSessionHealthChanged(tabIdValue: unknown, trackMuted: boolean, readyState?: MediaStreamTrackState | null, contextState?: AudioContextState | null): void {
+    const tabId = validTabId(tabIdValue);
+    if (tabId === null || !this.desiredTabs.has(tabId)) return;
+    if (!trackMuted) this.invalidateHealthProbe(tabId);
+    if (readyState === 'ended' || contextState === 'closed') {
+      this.scheduleRecovery(tabId, 'session-health-event');
+      return;
+    }
+    if (trackMuted) void this.probeHealthWhileAudible(tabId);
+  }
+
+  onTabAudibleChanged(tabIdValue: unknown, audible: boolean): void {
+    const tabId = validTabId(tabIdValue);
+    if (tabId === null || !this.desiredTabs.has(tabId)) return;
+    if (!audible) {
+      this.invalidateHealthProbe(tabId);
+      return;
+    }
+    void this.probeHealthWhileAudible(tabId);
   }
 
   onCaptureStatusChanged(info: CapturedTabInfo): void {
     if (!info || !Number.isInteger(info.tabId)) return;
-    if (info.status === 'active') this.setPhase(info.tabId, 'active');
+    if (info.status === 'active') {
+      if (this.desiredTabs.has(info.tabId)) this.setPhase(info.tabId, 'active');
+      return;
+    }
     if (info.status === 'stopped' || info.status === 'error') {
-      if (this.phaseFor(info.tabId) !== 'starting') this.setPhase(info.tabId, 'idle');
-      void this.maybeCloseOffscreen();
+      this.invalidateHealthProbe(info.tabId);
+      if (this.desiredTabs.has(info.tabId)) this.scheduleRecovery(info.tabId, `tab-capture-${info.status}`);
+      else {
+        if (this.phaseFor(info.tabId) !== 'starting') this.setPhase(info.tabId, 'idle');
+        void this.maybeCloseOffscreen();
+      }
     }
   }
 }
