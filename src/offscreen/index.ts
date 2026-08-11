@@ -8,6 +8,7 @@ import {
 import type { AudioState, ProtectionMode } from '../shared/types.js';
 import type { OffscreenMessage } from '../shared/messages.js';
 import { AudioSession } from '../audio/audio-session.js';
+import type { AudioSessionHealth } from '../audio/audio-session.js';
 
 const sessions = new Map<number, AudioSession>();
 const pendingSessions = new Map<number, Promise<{ ok: true }>>();
@@ -15,6 +16,7 @@ const sessionGeneration = new Map<number, number>();
 let audioContext: AudioContext | null = null;
 let globalState: AudioState = normalizeAudioState(null);
 let globalProtection: ProtectionMode = 'strong';
+let contextResumeInFlight: Promise<void> | null = null;
 
 function validTabId(value: unknown): number | null {
   if (value === null || value === undefined || value === '') return null;
@@ -27,9 +29,25 @@ function isExpectedCancellation(error: unknown): boolean {
   return /audio capture was cancelled/i.test(message);
 }
 
+async function ensureAudioContextRunning(): Promise<void> {
+  const context = audioContext;
+  if (!context || context.state !== 'suspended' || !sessions.size) return;
+  if (contextResumeInFlight) return contextResumeInFlight;
+  contextResumeInFlight = context.resume().catch(() => undefined).finally(() => { contextResumeInFlight = null; });
+  return contextResumeInFlight;
+}
+
+function bindAudioContextHealth(context: AudioContext): void {
+  context.addEventListener('statechange', () => {
+    if (audioContext !== context || !sessions.size) return;
+    if (context.state === 'suspended') void ensureAudioContextRunning();
+  });
+}
+
 async function getAudioContext(): Promise<AudioContext> {
   if (!audioContext || audioContext.state === 'closed') {
     audioContext = new AudioContext({ latencyHint: 'playback' });
+    bindAudioContextHealth(audioContext);
   }
   if (audioContext.state === 'suspended') {
     try { await audioContext.resume(); } catch { /* stream may not be ready yet */ }
@@ -45,8 +63,20 @@ function maybeSuspendContext(): void {
 
 async function handleSessionEnded(tabId: number): Promise<void> {
   sessions.delete(tabId);
-  try { await chrome.runtime.sendMessage({ type: MessageType.SessionEnded, tabId }); } catch { /* worker may be restarting */ }
+  try { await chrome.runtime.sendMessage({ type: MessageType.SessionEnded, tabId, reason: 'track-ended' }); } catch { /* worker may be restarting */ }
   maybeSuspendContext();
+}
+
+async function handleSessionHealthChange(tabId: number, health: AudioSessionHealth): Promise<void> {
+  try {
+    await chrome.runtime.sendMessage({
+      type: MessageType.SessionHealthChanged,
+      tabId,
+      trackMuted: health.trackMuted,
+      trackReadyState: health.trackReadyState,
+      contextState: health.contextState
+    });
+  } catch { /* popup/worker may be unavailable transiently */ }
 }
 
 async function createSession(
@@ -77,7 +107,10 @@ async function createSession(
 
     globalState = normalizeAudioState(message.state || globalState);
     globalProtection = normalizeProtection(message.protection || globalProtection);
-    const session = new AudioSession(context, tabId, stream, globalState, globalProtection, { onEnded: handleSessionEnded });
+    const session = new AudioSession(context, tabId, stream, globalState, globalProtection, {
+      onEnded: handleSessionEnded,
+      onHealthChange: handleSessionHealthChange
+    });
     sessions.set(tabId, session);
     if (context.state === 'suspended') await context.resume();
     return { ok: true };
@@ -144,8 +177,10 @@ async function handleMessage(message: OffscreenMessage): Promise<Record<string, 
     case MessageType.CaptureStop:
       return stopSession(message.tabId);
     case MessageType.SessionStatus: {
+      await ensureAudioContextRunning();
       const tabId = validTabId(message.tabId);
       const session = tabId !== null ? sessions.get(tabId) : undefined;
+      const health = session?.health();
       return {
         ok: true,
         active: Boolean(session),
@@ -153,7 +188,11 @@ async function handleMessage(message: OffscreenMessage): Promise<Record<string, 
         pendingTabs: [...pendingSessions.keys()],
         state: session ? session.state : null,
         protection: session ? session.protection : globalProtection,
-        sampleRate: session ? session.context.sampleRate : (audioContext && audioContext.state !== 'closed' ? audioContext.sampleRate : null)
+        sampleRate: session ? session.context.sampleRate : (audioContext && audioContext.state !== 'closed' ? audioContext.sampleRate : null),
+        trackReadyState: health?.trackReadyState ?? null,
+        trackMuted: health?.trackMuted ?? null,
+        trackEnabled: health?.trackEnabled ?? null,
+        contextState: health?.contextState ?? (audioContext?.state ?? null)
       };
     }
     case MessageType.StateSet: {
@@ -171,6 +210,7 @@ async function handleMessage(message: OffscreenMessage): Promise<Record<string, 
       for (const session of sessions.values()) session.applyProtection(globalProtection);
       return { ok: true };
     case MessageType.MeterGet: {
+      await ensureAudioContextRunning();
       const session = sessions.get(validTabId(message.tabId) ?? -1);
       return session
         ? { ok: true, active: true, meter: session.getMeter(message.spectrum === true, message.spectrumMode ?? 'balanced', message.levels !== false) }
