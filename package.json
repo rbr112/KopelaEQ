@@ -1,8 +1,7 @@
 {
   "name": "kopelaeq",
-  "version": "1.22.0",
+  "version": "1.22.1",
   "private": true,
-  "license": "MIT",
   "type": "module",
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -16,5 +15,6 @@
   },
   "engines": {
     "node": ">=20"
-  }
+  },
+  "license": "MIT"
 }
