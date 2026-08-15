@@ -1,65 +1,64 @@
-# KopelaEQ 1.22.0 final release checklist
+# KopelaEQ 1.28.8 release checklist
 
-## Finalization status
+## Automated / reproducible gates
 
-- [x] Maintainer accepted the 1.22.0 RC in a real-use smoke test.
-- [x] Extension code/DSP frozen for 1.22.0 Final.
-- [x] Extended 30–60 minute Chrome Task Manager soak remains recommended before/after Store publication.
-- [x] Chrome Web Store dashboard/account steps remain external publication tasks.
+- [x] TypeScript typecheck passes.
+- [x] Browser-native ESM build passes.
+- [x] StateSet/Protection latest-wins adversarial delay tests pass.
+- [x] Background slow-start authority and stale startup response tests pass.
+- [x] Offscreen stale-response generation test passes across delayed Worklet loading.
+- [x] Appearance identity latest-wins test passes.
+- [x] Artwork/background recovery journal and custom-theme deletion ordering tests pass.
+- [x] Cross-tab shared offscreen lifecycle race test passes.
+- [x] Pitch Worklet wrapper is TypeScript-checked and fake-worklet integration test passes.
+- [x] Pitch latency helper is allocation-free and popup startup does not import the realtime Pitch processor.
+- [x] Meter polling single-flight regression passes.
+- [x] Realtime control updates are grouped; EQ drag does not resync unrelated controls.
+- [x] Typed popup DOM/tag contracts pass UI QA.
+- [x] `noUnusedLocals` / `noUnusedParameters` are enabled in the normal TypeScript gate.
+- [x] Stale debug UI QA and obsolete fallback build wrapper are removed.
+- [x] Generic popup CSS has no exact duplicate selectors; the historical Band Inspector patch stack is removed.
+- [x] Node regression tests pass (33/33).
+- [x] Slow Appearance storage cannot repair/overwrite a valid stored custom theme.
+- [x] Slow preset storage performs no bundled-default write and preserves existing user presets before mutation.
+- [x] Surface/custom-theme/media-hint whole-map writes require authoritative storage.
+- [x] Media upload/theme-switch race regression passes.
+- [x] IndexedDB media mutations wait for transaction commit and close on version change.
+- [x] Uploaded image dimensions and GIF frame counts are bounded.
+- [x] GIF live-preview blur uses the same 6 px performance cap as full apply.
+- [x] Transient offscreen IPC cannot cause destructive capture reconciliation.
+- [x] Replacing a custom parent theme revalidates descendants.
+- [x] Selected-preset concurrent mutation regression passes.
+- [x] Static release/code checks pass.
+- [x] Frozen EQ response remains 0 dB different at 44.1/48 kHz.
+- [x] Meter/analyser side-chain remains transparent to the audible path.
+- [x] Disabled new DSP stages remain 0-sample-delta dry paths.
+- [x] Pitch perf checks p99 and callback deadline-miss rate.
+- [x] UI QA runs in an isolated process group and cleans Chromium descendants.
+- [x] Current-version handoff builder excludes historical QA screenshots/stale dist zips.
 
-## Automated — must be PASS
+## Chrome API compatibility
 
-- [x] TypeScript 5.8.3 strict typecheck
-- [x] Deterministic production build
-- [x] JavaScript syntax check for every emitted module
-- [x] Exact bundled-preset fixture check
-- [x] Runtime message parser tests
-- [x] BypassGate transition tests
-- [x] AudioSession tests
-- [x] Offscreen runtime tests
-- [x] CaptureManager lifecycle tests
-- [x] Background runtime tests
-- [x] MV3/security/static audit
-- [x] 3-band crossover math test
-- [x] Golden EQ response at 44.1/48 kHz
-- [x] Meter side-chain audible-transparency test
-- [x] Chromium popup QA
-- [x] Release/source ZIP integrity verification
-- [x] Build the release twice and confirm identical SHA-256
+- [x] `minimum_chrome_version` remains 116.
+- [x] `tabCapture.getMediaStreamId` / offscreen-document assumptions remain unchanged.
 
-## Manual Chrome tests — required before Store publication
+## Manual Chrome Stable smoke test
 
-- [ ] Load the final release ZIP unpacked in current Chrome Stable.
-- [ ] YouTube/music A/B against the accepted sound baseline with Dynamics Off + Protection Off.
-- [ ] Test all five bundled presets, especially Vivid and bass-heavy presets.
-- [ ] Start/Stop repeatedly on one tab; no `Cannot capture a tab with an active stream` error.
-- [ ] Capture two normal tabs one after another and verify state isolation.
-- [ ] Close a captured tab and verify audio/session resources disappear.
-- [ ] Navigate/reload a captured tab and verify expected capture behavior.
-- [ ] Test restricted pages (`chrome://`, Web Store) fail cleanly without a broken UI.
-- [ ] Test Windows display scaling at 100%, 125%, and 150% if available.
-- [ ] Run a 30–60 minute Chrome Task Manager soak with Spectrum/Meter both on and off; verify no monotonic RAM/CPU growth.
+- [ ] Load final `kopelaeq-1.28.8.zip` unpacked in current Chrome Stable.
+- [ ] Confirm saved Rice/Nocturne appearance and preloaded Rice artwork on normal startup.
+- [ ] Confirm existing custom themes/presets survive rapid reopen and browser restart.
+- [ ] Upload/replace/remove Artwork and Background while rapidly switching Rice/Nocturne.
+- [ ] Confirm oversized media/GIFs are rejected without freezing the popup.
+- [ ] Import a custom theme that extends another custom theme; replace the parent and verify invalid replacements are rejected.
+- [ ] Confirm Audio Tools/tool workspaces and keyboard accessibility.
+- [ ] Confirm Meter values/Spectrum and Dynamics Advanced scrolling.
+- [ ] Confirm Stereo, Protection, Reverb and 8D.
+- [ ] Confirm Pitch Down on real speech at representative negative values.
+- [ ] Confirm power/capture Start/Stop and browser restart with a real media tab.
+- [ ] Run a 30–60 minute Pitch Down CPU/RAM/listening soak.
 
-## Protection checks
+## Publication
 
-- [ ] Compare Protection Off / Light / Medium / Strong using Meter Pre/Post and GR.
-- [ ] Verify Protection only reduces output when required and that Off has no gain reduction.
-- [ ] Do a listening check on Vivid and Bass Heavy; automated metering cannot prove subjective transparency.
-
-## GitHub publication
-
-- [ ] Choose an open-source license only if you want to grant reuse rights; 1.22.0 currently ships with no open-source license.
-- [ ] Publish source, README, Architecture, Privacy, Store Listing draft, release notes, and hashes.
-- [ ] Tag the exact commit corresponding to the uploaded ZIP.
-- [ ] Attach `kopelaeq-1.22.0.zip`, source ZIP, and `SHA256SUMS.txt` to the release.
-- [ ] Enable an appropriate security-reporting/contact path.
-
-## Chrome Web Store publication
-
-- [ ] Host the privacy policy at a public HTTPS URL.
-- [ ] Ensure Store privacy answers exactly match actual local-only audio/settings behavior.
-- [ ] Use the single-purpose statement and permission justifications in `STORE_LISTING.md`.
-- [ ] Upload only `dist/kopelaeq-1.22.0.zip`.
-- [ ] Use current screenshots only; do not use old Page Workspace screenshots.
-- [ ] Confirm developer support/contact information.
-- [ ] Confirm 2-Step Verification on the developer account.
+- [ ] Attach `kopelaeq-1.28.8.zip`, `kopelaeq-1.28.8-source.zip`, `SHA256SUMS.txt`, release notes and QA report to the GitHub release.
+- [ ] Host the current privacy policy at a public HTTPS URL and complete Chrome Web Store privacy/data-use declarations.
+- [ ] Use current 1.28.8 screenshots only.

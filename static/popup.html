@@ -4,142 +4,288 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>KopelaEQ</title>
+  <script src="appearance-bootstrap.js"></script>
   <link rel="stylesheet" href="popup.css">
+  <link rel="stylesheet" href="appearance-layouts.css">
 </head>
 <body>
   <main class="app-shell">
-    <header class="topbar">
-      <div class="brand-wrap">
-        <div class="brand">KopelaEQ</div>
-        <div class="subtle">Realtime tab audio processor</div>
-      </div>
-      <div class="top-actions">
-        <button id="powerToggle" class="pill power" type="button" aria-pressed="false">
-          <span class="power-dot"></span><span class="power-label">Audio</span><span id="powerText">Off</span>
-        </button>
-      </div>
-    </header>
-
-    <section class="eq-section" aria-label="Parametric equalizer">
-      <div class="section-title-row">
-        <div>
-          <div class="eyebrow">Parametric EQ</div>
-          <div class="section-meta">11 bands · click a point for precise controls</div>
-        </div>
-        <div class="eq-toolbar">
-          <button id="analyzerToggle" class="mini-toggle" type="button" aria-pressed="true" title="Show or hide output spectrum. Spectrum uses the right-side dBFS scale; EQ uses the left-side gain scale.">Spectrum <span>On</span></button>
-          <button id="helpButton" class="help-button" type="button" aria-label="Open quick guide" title="Quick guide">?</button>
-          <button id="resetButton" class="text-button" type="button" title="Reset Gain and EQ only">Reset</button>
-        </div>
-      </div>
-
-      <div class="eq-layout">
-        <div class="gain-column">
-          <div class="gain-label">GAIN</div>
-          <output id="gainPercentReadout" class="gain-percent-readout">100%</output>
-          <output id="gainReadout" class="gain-readout">0.0 dB</output>
-          <div class="gain-slider-wrap">
-            <div class="gain-scale" aria-hidden="true">
-              <span style="top:0%">+10</span>
-              <span class="gain-zero-label" style="top:25%">0</span>
-              <span style="top:50%">−10</span>
-              <span style="top:75%">−20</span>
-              <span style="top:100%">−30</span>
-            </div>
-            <i class="gain-zero-mark" aria-hidden="true"></i>
-            <input id="gainSlider" class="gain-slider" type="range" min="-30" max="10" step="0.1" value="0" aria-label="Master gain">
+    <section class="primary-surface">
+      <header class="topbar">
+        <div class="brand-wrap">
+          <div class="brand">
+            <svg class="brand-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h2m2-5v10m3-13v16m3-11v6m3-9v12m3-8v4m2-2h1"/></svg>
+            <span>KopelaEQ</span>
           </div>
-          <button id="gainResetButton" class="gain-reset-button" type="button" title="Set Gain to 0 dB">0 dB</button>
+          <div class="subtle">Realtime tab audio processor</div>
         </div>
-        <div class="canvas-wrap">
-          <canvas id="eqCanvas" width="620" height="316" tabindex="0" aria-label="Parametric equalizer graph"></canvas>
-          <div id="canvasTooltip" class="canvas-tooltip" hidden></div>
-          <aside id="bandInspector" class="band-inspector" hidden aria-label="Selected EQ band">
-            <div class="band-inspector-head">
-              <div><span id="bandIndexLabel">BAND 1</span><strong id="bandTypeLabel">Low Shelf</strong></div>
-              <button id="bandInspectorClose" type="button" aria-label="Close band controls">×</button>
+        <div class="topbar-center">
+          <div id="presetControl" class="preset-control" title="Select a complete audio preset">
+            <span>PRESET</span>
+            <button id="presetPickerButton" class="preset-picker-button" type="button" aria-haspopup="listbox" aria-expanded="false">
+              <strong id="presetPickerText">Current settings</strong>
+            </button>
+            <div id="presetMenu" class="preset-menu" role="listbox" aria-label="Preset" hidden>
+              <div id="presetMenuList" class="preset-menu-list"></div>
             </div>
-            <div class="band-fields">
-              <label><span>Frequency</span><div class="number-field"><input id="bandFrequency" type="number" min="5" max="20000" step="1"><small>Hz</small></div></label>
-              <label><span>Gain</span><div class="number-field"><input id="bandGain" type="number" min="-30" max="30" step="0.1"><small>dB</small></div></label>
-              <label><span>Q</span><div class="number-field"><input id="bandQ" type="number" min="0.2" max="11" step="0.01"><small id="bandQUnit">Q</small></div></label>
-            </div>
-            <div class="band-inspector-meta"><span id="bandTotalReadout">Total 0.0 dB</span><span id="bandHint">Drag point · wheel changes Q</span></div>
-            <button id="bandResetButton" class="band-reset-button" type="button">Reset band</button>
-          </aside>
+            <select id="presetSelect" hidden aria-hidden="true" tabindex="-1"></select>
+          </div>
         </div>
-      </div>
+        <div class="top-actions">
+          <button id="appearanceButton" class="icon-button appearance-button" type="button" aria-label="Appearance" title="Appearance">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v2m0 14v2M3 12h2m14 0h2M5.6 5.6 7 7m10 10 1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4"/><circle cx="12" cy="12" r="4"/></svg>
+          </button>
+          <button id="powerToggle" class="pill power" type="button" aria-pressed="false">
+            <span class="power-dot"></span><span class="power-label">Audio</span><span id="powerText">Off</span>
+          </button>
+        </div>
+      </header>
+
+      <section class="eq-section" aria-label="Parametric equalizer">
+        <div class="section-title-row">
+          <div class="section-copy">
+            <div class="eyebrow">Equalizer</div>
+            <div class="section-meta">11 bands · click a point for precise controls</div>
+          </div>
+          <div class="eq-toolbar">
+            <button id="analyzerToggle" class="mini-toggle" type="button" aria-pressed="true" title="Show or hide output spectrum. Spectrum uses the right-side dBFS scale; EQ uses the left-side gain scale.">Spectrum <span>On</span></button>
+            <button id="helpButton" class="help-button" type="button" aria-label="Open quick guide" title="Quick guide">?</button>
+            <button id="resetButton" class="text-button" type="button" title="Reset Gain and EQ only">Reset</button>
+          </div>
+        </div>
+
+        <div class="tab-utility" aria-label="Active audio tab">
+          <div class="theme-art-card" aria-hidden="true"></div>
+          <div class="tab-copy">
+            <small id="activeTabHost">Waiting for audio…</small>
+            <strong id="activeTabTitle">Current tab</strong>
+          </div>
+        </div>
+
+        <div class="eq-layout">
+          <div class="gain-column">
+            <div class="gain-label">GAIN</div>
+            <output id="gainPercentReadout" class="gain-percent-readout">100%</output>
+            <output id="gainReadout" class="gain-readout">0.0 dB</output>
+            <div class="gain-slider-wrap">
+              <div class="gain-scale" aria-hidden="true">
+                <span style="top:0%">+10</span>
+                <span class="gain-zero-label" style="top:25%">0</span>
+                <span style="top:50%">−10</span>
+                <span style="top:75%">−20</span>
+                <span style="top:100%">−30</span>
+              </div>
+              <i class="gain-zero-mark" aria-hidden="true"></i>
+              <input id="gainSlider" class="gain-slider" type="range" min="-30" max="10" step="0.1" value="0" aria-label="Master gain">
+            </div>
+            <button id="gainResetButton" class="gain-reset-button" type="button" title="Set Gain to 0 dB">0 dB</button>
+          </div>
+          <div class="canvas-wrap">
+            <canvas id="eqCanvas" width="620" height="316" tabindex="0" aria-label="Parametric equalizer graph"></canvas>
+            <div id="canvasTooltip" class="canvas-tooltip" hidden></div>
+
+          </div>
+        </div>
+      </section>
+
+      <footer class="statusbar">
+        <span id="statusText" role="status" aria-live="polite">Ready</span>
+        <div class="rice-footer-meta" aria-label="Output status">
+          <span class="rice-footer-item"><span class="rice-footer-label">Protection</span><strong id="footerProtection">Strong</strong></span>
+        </div>
+        <span class="local-audio-note" title="KopelaEQ processes the selected tab audio locally in your browser and does not upload it.">Audio stays on this device</span>
+      </footer>
     </section>
+
+    <aside id="bandInspector" class="band-inspector" hidden aria-label="Selected EQ band">
+      <div class="band-inspector-head">
+        <div class="band-inspector-title">
+          <span id="bandIndexLabel">BAND 1</span>
+          <strong id="bandTypeLabel">Low Shelf</strong>
+        </div>
+        <button id="bandInspectorClose" class="band-inspector-close" type="button" aria-label="Close band controls">×</button>
+      </div>
+      <div class="band-fields">
+        <label data-band-field="frequency"><span>Frequency</span><div class="number-stepper"><button class="band-step-button" type="button" data-band-step="frequency" data-direction="-1" aria-label="Decrease frequency">−</button><div class="number-field"><input id="bandFrequency" type="number" min="5" max="20000" step="1" inputmode="decimal"><small>Hz</small></div><button class="band-step-button" type="button" data-band-step="frequency" data-direction="1" aria-label="Increase frequency">+</button></div></label>
+        <label data-band-field="gain"><span>Gain</span><div class="number-stepper"><button class="band-step-button" type="button" data-band-step="gain" data-direction="-1" aria-label="Decrease gain">−</button><div class="number-field"><input id="bandGain" type="number" min="-30" max="30" step="0.1" inputmode="decimal"><small>dB</small></div><button class="band-step-button" type="button" data-band-step="gain" data-direction="1" aria-label="Increase gain">+</button></div></label>
+        <label data-band-field="q"><span>Q</span><div class="number-stepper"><button class="band-step-button" type="button" data-band-step="q" data-direction="-1" aria-label="Decrease Q">−</button><div class="number-field"><input id="bandQ" type="number" min="0.2" max="11" step="0.01" inputmode="decimal"><small id="bandQUnit">Q</small></div><button class="band-step-button" type="button" data-band-step="q" data-direction="1" aria-label="Increase Q">+</button></div></label>
+      </div>
+      <div class="band-inspector-summary">
+        <span id="bandTotalReadout" class="band-total-readout">Total 0.0 dB</span>
+        <span id="bandHint" class="band-gesture-hint">Drag point · wheel changes Q</span>
+      </div>
+      <button id="bandResetButton" class="band-reset-button" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 8v5h5"/><path d="M6.4 12A6.2 6.2 0 1 0 8 6.5L5 9"/></svg>
+        <span>Reset this band</span>
+      </button>
+    </aside>
 
     <section class="control-strip" aria-label="Audio modules">
-      <div id="presetControl" class="preset-control" title="Select a complete audio preset">
-        <span>PRESET</span>
-        <button id="presetPickerButton" class="preset-picker-button" type="button" aria-haspopup="listbox" aria-expanded="false">
-          <strong id="presetPickerText">Current settings</strong>
-        </button>
-        <div id="presetMenu" class="preset-menu" role="listbox" aria-label="Preset" hidden>
-          <div id="presetMenuList" class="preset-menu-list"></div>
-        </div>
-        <select id="presetSelect" hidden aria-hidden="true" tabindex="-1"></select>
+      <div class="tool-strip-head">
+        <span class="tool-strip-brand"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h2m2-5v10m3-13v16m3-10v4m3-8v12m3-8v4"/></svg></span>
+        <strong>Audio Tools</strong>
       </div>
-      <button id="dynamicsButton" class="module-button" type="button" title="Dynamics · optional peak and level control">Dynamics <span>Off</span></button>
-      <button id="meterButton" class="module-button" type="button" title="Meter · pre/post Protection peaks, RMS and gain reduction">Meter <span>Pre/Post</span></button>
-      <button id="protectionButton" class="module-button protection" type="button" title="Protection · final output safety stage">Protection <span>Strong</span></button>
-      <button id="moreButton" class="icon-button" type="button" aria-label="Preset actions" title="Preset actions">•••</button>
+      <button id="dynamicsButton" class="module-button" type="button" title="Dynamics · optional peak and level control">
+        <svg class="module-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 15h3l2-7 3 10 2-6 2 3h4"/></svg>
+        <span class="module-label">Dynamics</span><span class="module-state" data-state-label>Off</span>
+      </button>
+      <button id="stereoButton" class="module-button" type="button" title="Stereo · width, balance, mono and L/R swap">
+        <svg class="module-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7 4 12l4 5M16 7l4 5-4 5M5 12h14"/></svg>
+        <span class="module-label">Stereo</span><span class="module-state" data-state-label>Off</span>
+      </button>
+      <button id="protectionButton" class="module-button protection" type="button" title="Protection · final safety limiter before decorative effects">
+        <svg class="module-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 19 6v5c0 4.6-2.8 7.8-7 10-4.2-2.2-7-5.4-7-10V6l7-3Z"/><path d="m9 12 2 2 4-5"/></svg>
+        <span class="module-label">Protection</span><span class="module-state" data-state-label>Strong</span>
+      </button>
+      <button id="meterButton" class="module-button" type="button" title="Meter · pre/post Protection peaks, RMS and gain reduction">
+        <svg class="module-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 18V9m5 9V5m5 13v-6m4 6V7"/></svg>
+        <span class="module-label">Meter</span><span class="module-state" data-state-label>Pre/Post</span>
+      </button>
+      <button id="effectsButton" class="module-button" type="button" title="Effects · Down Pitch, Reverb and 8D">
+        <svg class="module-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 1.4 4.6L18 9l-4.6 1.4L12 15l-1.4-4.6L6 9l4.6-1.4L12 3Z"/><path d="m18 15 .8 2.2L21 18l-2.2.8L18 21l-.8-2.2L15 18l2.2-.8L18 15Z"/></svg>
+        <span class="module-label">Effects</span><span class="module-state" data-state-label>Off</span>
+      </button>
+      <button id="moreButton" class="icon-button tool-more-button" type="button" aria-label="Preset actions" title="Preset actions">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h14"/><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="11" cy="18" r="1.5"/></svg>
+        <span class="tool-more-label">Presets</span>
+      </button>
     </section>
-
-    <footer class="statusbar">
-      <span id="statusText" role="status" aria-live="polite">Ready</span>
-      <span class="local-audio-note" title="KopelaEQ processes the selected tab audio locally in your browser and does not upload it.">Audio stays on this device</span>
-    </footer>
   </main>
 
+  <section id="appearancePanel" class="floating-panel appearance-panel" data-default-left="430" data-default-top="54" hidden>
+    <header class="floating-head"><span class="floating-head-title"><button class="panel-back-button workspace-back" data-back-workspace type="button" aria-label="Back" title="Back">‹</button><span>Appearance</span></span><button data-close="appearancePanel" aria-label="Close">×</button></header>
+    <div class="floating-body appearance-body">
+      <nav id="appearanceTabs" class="appearance-tabs" aria-label="Appearance sections">
+        <button type="button" data-appearance-tab="theme" class="active" aria-selected="true">Theme</button>
+        <button type="button" data-appearance-tab="media" aria-selected="false">Media</button>
+        <button type="button" data-appearance-tab="surfaces" aria-selected="false">Surfaces</button>
+        <button type="button" data-appearance-tab="advanced" aria-selected="false">Advanced</button>
+      </nav>
+
+      <section class="appearance-pane" data-appearance-pane="theme">
+        <div class="appearance-intro"><span class="panel-kicker">Interface style</span><span>Choose a base theme or install your own JSON theme.</span></div>
+        <div id="appearanceThemeOptions" class="appearance-theme-options" aria-label="Theme">
+          <button type="button" data-theme-choice="rice" aria-pressed="false">
+            <span class="theme-preview theme-preview-rice" aria-hidden="true"><i class="theme-preview-window"></i><i class="theme-preview-rail"></i><svg viewBox="0 0 92 42"><path d="M7 29c12 0 15-8 27-8 11 0 13 6 23 6 9 0 13-7 28-7"/><circle cx="34" cy="21" r="2.6"/><circle cx="57" cy="27" r="2.6"/></svg></span>
+            <span class="theme-choice-copy"><span class="theme-choice-heading"><strong>Rice</strong><em>Day</em></span><small>Landscape · soft glass · colored bands</small></span><span class="theme-choice-check" aria-hidden="true">✓</span>
+          </button>
+          <button type="button" data-theme-choice="nocturne" aria-pressed="false">
+            <span class="theme-preview theme-preview-nocturne" aria-hidden="true"><i class="theme-preview-window"></i><i class="theme-preview-rail"></i><svg viewBox="0 0 92 42"><path d="M7 29c12 0 15-8 27-8 11 0 13 6 23 6 9 0 13-7 28-7"/><circle cx="34" cy="21" r="2.6"/><circle cx="57" cy="27" r="2.6"/></svg></span>
+            <span class="theme-choice-copy"><span class="theme-choice-heading"><strong>Nocturne</strong><em>Night</em></span><small>Focused · dark · violet mono</small></span><span class="theme-choice-check" aria-hidden="true">✓</span>
+          </button>
+        </div>
+        <div class="appearance-custom-head"><div><span class="panel-kicker">Custom themes</span><small>Import a local KopelaEQ theme JSON.</small></div><button id="importThemeButton" class="appearance-small-button" type="button">Import</button></div>
+        <div id="appearanceCustomThemeOptions" class="appearance-theme-options appearance-custom-theme-options" aria-label="Custom themes"></div>
+        <div id="noCustomThemeHint" class="appearance-empty-hint">No custom themes yet. Start with the example JSON and change only the tokens you want.</div>
+        <div class="appearance-custom-actions"><button id="themeExampleButton" class="appearance-small-button" type="button">Download example</button><button id="exportCustomThemeButton" class="appearance-small-button" type="button" hidden>Export selected</button><button id="deleteCustomThemeButton" class="appearance-small-button danger-button" type="button" hidden>Remove selected</button></div>
+        <input id="themeImportFile" type="file" accept="application/json,.json" hidden>
+      </section>
+
+      <section class="appearance-pane" data-appearance-pane="media" hidden>
+        <section class="appearance-artwork-section" aria-label="Artwork card">
+          <div class="appearance-artwork-head"><div><span class="panel-kicker">Artwork card</span><small>PNG, JPG, WebP or animated GIF · local only.</small></div><button id="artworkUploadButton" class="appearance-small-button" type="button">Upload</button></div>
+          <div class="appearance-artwork-row"><div id="artworkPreview" class="appearance-artwork-preview" aria-hidden="true"></div><div class="appearance-artwork-copy"><strong id="artworkCurrentName">Theme default</strong><small id="artworkCurrentMeta">Uses the artwork included with this theme.</small></div><button id="artworkRemoveButton" class="appearance-small-button danger-button" type="button" hidden>Remove</button></div>
+          <div class="appearance-artwork-fit"><span>Fit</span><div id="artworkFitOptions" class="segmented" aria-label="Artwork fit"><button type="button" data-artwork-fit="cover">Cover</button><button type="button" data-artwork-fit="contain">Contain</button></div></div>
+          <div class="appearance-artwork-note">Cover fills the card. Contain keeps the original image or GIF fully visible.</div>
+        </section>
+        <input id="artworkFile" type="file" accept="image/png,image/jpeg,image/webp,image/gif,.png,.jpg,.jpeg,.webp,.gif" hidden>
+        <section class="appearance-artwork-section appearance-background-section" aria-label="Theme background">
+          <div class="appearance-artwork-head"><div><span class="panel-kicker">Background</span><small>Replace the full popup backdrop with an image or animated GIF.</small></div><button id="backgroundUploadButton" class="appearance-small-button" type="button">Upload</button></div>
+          <div class="appearance-artwork-row"><div id="backgroundPreview" class="appearance-artwork-preview appearance-background-preview" aria-hidden="true"></div><div class="appearance-artwork-copy"><strong id="backgroundCurrentName">Theme default</strong><small id="backgroundCurrentMeta">Uses the background included with this theme.</small></div><button id="backgroundRemoveButton" class="appearance-small-button danger-button" type="button" hidden>Remove</button></div>
+          <div class="appearance-artwork-fit"><span>Fit</span><div id="backgroundFitOptions" class="segmented" aria-label="Background fit"><button type="button" data-background-fit="cover">Cover</button><button type="button" data-background-fit="contain">Contain</button></div></div>
+          <div class="appearance-artwork-note">Animated GIF backgrounds automatically use a lighter glass blur while playing to reduce GPU load.</div>
+        </section>
+        <input id="backgroundFile" type="file" accept="image/png,image/jpeg,image/webp,image/gif,.png,.jpg,.jpeg,.webp,.gif" hidden>
+      </section>
+
+      <section class="appearance-pane" data-appearance-pane="surfaces" hidden>
+        <div class="appearance-surface-head"><div><span class="panel-kicker">Surface customization</span><small>Each real UI layer gets its own color and transparency.</small></div><button id="surfaceResetButton" class="appearance-small-button" type="button">Reset all</button></div>
+        <div class="appearance-surface-grid">
+          <div class="appearance-surface-control"><div class="appearance-surface-title"><strong>Main</strong><output id="mainSurfaceOpacityReadout">89%</output></div><div class="appearance-surface-row"><label class="appearance-color-field"><span>Color</span><input id="mainSurfaceColor" type="color" value="#101a22" aria-label="Main panel color"></label><label class="appearance-opacity-field"><span>Opacity</span><input id="mainSurfaceOpacity" type="range" min="10" max="100" step="1" value="89" aria-label="Main panel opacity"></label></div></div>
+          <div class="appearance-surface-control"><div class="appearance-surface-title"><strong>EQ surface</strong><output id="eqSurfaceOpacityReadout">88%</output></div><div class="appearance-surface-row"><label class="appearance-color-field"><span>Color</span><input id="eqSurfaceColor" type="color" value="#101a22" aria-label="EQ surface color"></label><label class="appearance-opacity-field"><span>Opacity</span><input id="eqSurfaceOpacity" type="range" min="0" max="100" step="1" value="88" aria-label="EQ surface opacity"></label></div></div>
+          <div class="appearance-surface-control"><div class="appearance-surface-title"><strong>Cards</strong><output id="cardsSurfaceOpacityReadout">72%</output></div><div class="appearance-surface-row"><label class="appearance-color-field"><span>Color</span><input id="cardsSurfaceColor" type="color" value="#182630" aria-label="Cards surface color"></label><label class="appearance-opacity-field"><span>Opacity</span><input id="cardsSurfaceOpacity" type="range" min="0" max="100" step="1" value="72" aria-label="Cards surface opacity"></label></div></div>
+          <div class="appearance-surface-control"><div class="appearance-surface-title"><strong>Audio Tools</strong><output id="toolsSurfaceOpacityReadout">89%</output></div><div class="appearance-surface-row"><label class="appearance-color-field"><span>Color</span><input id="toolsSurfaceColor" type="color" value="#101a22" aria-label="Audio Tools color"></label><label class="appearance-opacity-field"><span>Opacity</span><input id="toolsSurfaceOpacity" type="range" min="10" max="100" step="1" value="89" aria-label="Audio Tools opacity"></label></div></div>
+          <div class="appearance-surface-control"><div class="appearance-surface-title"><strong>Controls</strong><output id="controlsSurfaceOpacityReadout">78%</output></div><div class="appearance-surface-row"><label class="appearance-color-field"><span>Color</span><input id="controlsSurfaceColor" type="color" value="#182630" aria-label="Controls surface color"></label><label class="appearance-opacity-field"><span>Opacity</span><input id="controlsSurfaceOpacity" type="range" min="0" max="100" step="1" value="78" aria-label="Controls surface opacity"></label></div></div>
+        </div>
+        <div class="appearance-custom-actions appearance-look-actions"><button id="exportCurrentLookButton" class="appearance-small-button" type="button">Export current look</button></div>
+        <div class="appearance-artwork-note">Changes preview live. Storage is written only after you finish a control.</div>
+      </section>
+
+      <section class="appearance-pane" data-appearance-pane="advanced" hidden>
+        <div class="appearance-color-grid">
+          <label class="appearance-color-field"><span>Accent</span><input id="accentColor" type="color" value="#6c91ff"></label><label class="appearance-color-field"><span>Accent 2</span><input id="accentAltColor" type="color" value="#a58af5"></label>
+          <label class="appearance-color-field"><span>Positive</span><input id="positiveColor" type="color" value="#64d28a"></label><label class="appearance-color-field"><span>Danger</span><input id="dangerColor" type="color" value="#e1767d"></label>
+          <label class="appearance-color-field"><span>EQ curve</span><input id="eqCurveColor" type="color" value="#72d5bd"></label><label class="appearance-color-field"><span>Border</span><input id="borderColor" type="color" value="#2a3a46"></label>
+          <label class="appearance-color-field"><span>Text</span><input id="textColor" type="color" value="#e8eef4"></label><label class="appearance-color-field"><span>Muted text</span><input id="mutedTextColor" type="color" value="#8495a5"></label>
+        </div>
+        <div class="appearance-advanced-ranges">
+          <label class="appearance-wide-range"><span>Border intensity <output id="borderOpacityReadout">72%</output></span><input id="borderOpacity" type="range" min="0" max="100" step="1" value="72"></label>
+          <label class="appearance-wide-range"><span>Background overlay <output id="backgroundDimReadout">30%</output></span><input id="backgroundDim" type="range" min="0" max="100" step="1" value="30"></label>
+          <label class="appearance-wide-range"><span>Glass blur <output id="surfaceBlurReadout">16 px</output></span><input id="surfaceBlur" type="range" min="0" max="30" step="1" value="16"></label>
+          <label class="appearance-wide-range"><span>Shadow <output id="shadowStrengthReadout">56%</output></span><input id="shadowStrength" type="range" min="0" max="100" step="1" value="56"></label>
+          <label class="appearance-wide-range"><span>Window radius <output id="windowRadiusReadout">18 px</output></span><input id="windowRadius" type="range" min="0" max="32" step="1" value="18"></label>
+          <label class="appearance-wide-range"><span>Panel radius <output id="panelRadiusReadout">16 px</output></span><input id="panelRadius" type="range" min="0" max="32" step="1" value="16"></label>
+          <label class="appearance-wide-range"><span>Control radius <output id="controlRadiusReadout">11 px</output></span><input id="controlRadius" type="range" min="0" max="32" step="1" value="11"></label>
+        </div>
+        <div class="appearance-safe-note"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 19 6v5c0 4.6-2.8 7.8-7 10-4.2-2.2-7-5.4-7-10V6l7-3Z"/><path d="m9 12 2 2 4-5"/></svg><span>Visual only — audio and DSP settings never change.</span></div>
+      </section>
+    </div>
+  </section>
+
   <section id="helpPanel" class="floating-panel help-panel" data-default-left="416" data-default-top="74" hidden>
-    <header class="floating-head"><span>QUICK GUIDE</span><button data-close="helpPanel" aria-label="Close">×</button></header>
+    <header class="floating-head"><span>Quick guide</span><button data-close="helpPanel" aria-label="Close">×</button></header>
     <div class="floating-body help-body">
       <div class="guide-row"><strong>Gain</strong><span>Input level before EQ. Percent and dB show the same setting in two forms.</span></div>
       <div class="guide-row"><strong>EQ</strong><span>Drag a point to change frequency and gain. Click a point for precise controls. On Peak bands, mouse wheel or Shift-drag changes Q. Shelf Q is not used by Web Audio.</span></div>
       <div class="guide-row"><strong>Dynamics</strong><span>Controls peaks and level changes. 3-band can treat lows, mids and highs separately.</span></div>
-      <div class="guide-row"><strong>Protection</strong><span>Final safety stage after the other modules. It is global and is not stored in presets.</span></div>
+      <div class="guide-row"><strong>Stereo</strong><span>Mid/Side width, balance, mono and L/R swap. Stereo sits before Protection so widening peaks are still visible to the limiter.</span></div>
+      <div class="guide-row"><strong>Pitch</strong><span>Lowers tone by up to 12 semitones without changing playback speed. Upward shifting was removed because speech quality was not reliable enough.</span></div>
+      <div class="guide-row"><strong>Effects</strong><span>Down Pitch, Reverb and 8D are grouped under Effects. Reverb and 8D are post-Protection creative stages; Pitch stays before Dynamics. Delay and Exciter were retired to keep the extension focused and easier to use.</span></div>
+      <div class="guide-row"><strong>Protection</strong><span>Safety limiter after Stereo and before decorative effects. It is global and is not stored in presets.</span></div>
       <div class="panel-note">Panel positions are only workspace layout. Dragging a panel never changes the audio signal order.</div>
     </div>
   </section>
 
-  <section id="presetPanel" class="floating-panel" data-default-left="414" data-default-top="320" hidden>
-    <header class="floating-head"><span>PRESET ACTIONS</span><button data-close="presetPanel" aria-label="Close">×</button></header>
-    <div class="floating-body">
-      <label class="field-label">Preset name<input id="presetName" maxlength="80" autocomplete="off" placeholder="New preset name"></label>
-      <div class="button-grid preset-primary-actions">
-        <button id="saveAsPresetButton" type="button">Save as</button>
-        <button id="updatePresetButton" type="button">Update selected</button>
-        <button id="duplicatePresetButton" type="button">Duplicate</button>
-        <button id="renamePresetButton" type="button">Rename</button>
+  <section id="presetPanel" class="floating-panel preset-panel" data-default-left="414" data-default-top="320" hidden>
+    <header class="floating-head"><span>Presets</span><button data-close="presetPanel" aria-label="Close">×</button></header>
+    <div class="floating-body preset-body">
+      <div class="preset-editor-block">
+        <label class="field-label preset-name-field"><span>Name</span><input id="presetName" maxlength="80" autocomplete="off" placeholder="New preset name"></label>
+        <button id="saveAsPresetButton" class="preset-save-button" type="button">Save current as new</button>
       </div>
-      <div class="button-grid preset-secondary-actions">
-        <button id="deletePresetButton" class="danger-button" type="button">Delete</button>
-        <button id="importPresetButton" type="button">Import</button>
-        <button id="exportPresetButton" type="button">Export</button>
+      <div class="preset-action-section">
+        <span id="presetActionTitle" class="panel-kicker">Selected preset</span>
+        <button id="updatePresetButton" class="preset-update-button" type="button">Update selected</button>
+        <div class="button-grid preset-edit-actions">
+          <button id="duplicatePresetButton" type="button">Duplicate</button>
+          <button id="renamePresetButton" type="button">Rename</button>
+        </div>
       </div>
+      <div class="preset-file-row" aria-label="Preset file actions">
+        <button id="importPresetButton" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v11m0 0-4-4m4 4 4-4"/><path d="M5 18v2h14v-2"/></svg><span>Import</span></button>
+        <button id="exportPresetButton" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4m0 0-4 4m4-4 4 4"/><path d="M5 18v2h14v-2"/></svg><span>Export</span></button>
+      </div>
+      <button id="deletePresetButton" class="danger-button preset-delete-button" type="button">Delete selected preset</button>
       <input id="importFile" type="file" accept="application/json,.json" hidden>
-      <div id="presetActionHint" class="panel-note">Presets apply the EQ curve. Gain, Dynamics, Protection and panel positions stay independent.</div>
+      <div id="presetActionHint" class="panel-note preset-context-note">Presets apply the EQ curve. Gain, DSP modules, Protection and panel positions stay independent.</div>
     </div>
   </section>
 
   <section id="protectionPanel" class="floating-panel compact-panel" data-default-left="472" data-default-top="110" hidden>
-    <header class="floating-head"><span>CLIP PROTECTION</span><button data-close="protectionPanel" aria-label="Close">×</button></header>
+    <header class="floating-head"><span class="floating-head-title"><button class="panel-back-button workspace-back" data-back-workspace type="button" aria-label="Back to equalizer" title="Back to equalizer">‹</button><span>Clip protection</span></span><button data-close="protectionPanel" aria-label="Close">×</button></header>
     <div class="floating-body">
       <div class="panel-note strong-note">Final output safety. Strong is recommended for aggressive Gain or EQ. Uses the compressor-only protection path so the new modules do not add extra saturation.</div>
       <div id="protectionOptions" class="segmented vertical">
-        <button data-protection="strong" type="button">Strong</button>
-        <button data-protection="medium" type="button">Medium</button>
-        <button data-protection="light" type="button">Light</button>
-        <button data-protection="off" type="button">Off</button>
+        <button data-protection="strong" type="button"><strong>Strong</strong><span>Maximum safety</span></button>
+        <button data-protection="medium" type="button"><strong>Medium</strong><span>Balanced control</span></button>
+        <button data-protection="light" type="button"><strong>Light</strong><span>Gentle peak guard</span></button>
+        <button data-protection="off" type="button"><strong>Off</strong><span>No peak limiting</span></button>
       </div>
     </div>
   </section>
 
   <section id="dynamicsPanel" class="floating-panel" data-default-left="322" data-default-top="54" hidden>
-    <header class="floating-head"><span>DYNAMICS</span><button data-close="dynamicsPanel" aria-label="Close">×</button></header>
+    <header class="floating-head"><span class="floating-head-title"><button class="panel-back-button workspace-back" data-back-workspace type="button" aria-label="Back" title="Back">‹</button><span>Dynamics</span></span><button data-close="dynamicsPanel" aria-label="Close">×</button></header>
     <div class="floating-body">
       <div class="row-between"><div><span class="field-title">Processing</span><div class="field-subtitle">Optional peak and level control</div></div><label class="switch"><input id="dynamicsEnabled" type="checkbox"><span></span></label></div>
       <div class="segmented"><button id="normalModeButton" type="button">Normal</button><button id="multibandModeButton" type="button">3-band</button></div>
@@ -164,9 +310,61 @@
     </div>
   </section>
 
-  <section id="meterPanel" class="floating-panel meter-panel" data-default-left="390" data-default-top="86" hidden>
+  <section id="stereoPanel" class="floating-panel" data-default-left="250" data-default-top="70" hidden>
+    <header class="floating-head"><span class="floating-head-title"><button class="panel-back-button workspace-back" data-back-workspace type="button" aria-label="Back to equalizer" title="Back to equalizer">‹</button><span>Stereo</span></span><button data-close="stereoPanel" aria-label="Close">×</button></header>
+    <div class="floating-body">
+      <div class="row-between"><div><span class="field-title">Processing</span><div class="field-subtitle">Mid/Side stereo stage before Protection</div></div><label class="switch"><input id="stereoEnabled" type="checkbox"><span></span></label></div>
+      <label class="slider-field"><span>Width <output id="stereoWidthReadout">100%</output></span><input id="stereoWidth" type="range" min="0" max="200" step="1"><small>0% = mono, 100% = unchanged, 200% = maximum width.</small></label>
+      <label class="slider-field"><span>Balance <output id="stereoBalanceReadout">0%</output></span><input id="stereoBalance" type="range" min="-100" max="100" step="1"></label>
+      <div class="button-grid two"><button id="stereoMonoButton" type="button">Mono</button><button id="stereoSwapButton" type="button">Swap L/R</button></div>
+      <div class="panel-note">Mono temporarily forces effective width to 0%; your width value is preserved and the slider is disabled while Mono is active.</div>
+    </div>
+  </section>
+
+  <section id="effectsPanel" class="floating-panel effects-panel" data-default-left="404" data-default-top="92" hidden>
+    <header class="floating-head"><span class="floating-head-title"><button class="panel-back-button workspace-back" data-back-workspace type="button" aria-label="Back to equalizer" title="Back to equalizer">‹</button><span>Effects</span></span><button data-close="effectsPanel" aria-label="Close">×</button></header>
+    <div class="floating-body effects-list">
+      <button id="pitchButton" class="effect-entry" type="button" title="Pitch Down · lowers tone without changing playback speed"><span class="effect-glyph" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 4v14m0 0-5-5m5 5 5-5"/></svg></span><span class="effect-copy"><strong>Pitch Down</strong><small>Lower tone · keeps playback at 1×</small></span><span data-state-label>Off</span></button>
+      <button id="reverbButton" class="effect-entry" type="button" title="Reverb · synthetic room simulation"><span class="effect-glyph" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 12c2.2-5 4.3-5 6.4 0s4.3 5 6.4 0 3.1-3.2 3.2-4"/><path d="M4 16c2.2-3.2 4.3-3.2 6.4 0s4.3 3.2 6.4 0 2.4-2.1 3.2-2.4"/></svg></span><span class="effect-copy"><strong>Reverb</strong><small>Room · Hall · Plate</small></span><span data-state-label>Off</span></button>
+      <button id="autoPanButton" class="effect-entry" type="button" title="8D / Auto-pan · periodic stereo movement"><span class="effect-glyph" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 8 2 12l3 4M19 8l3 4-3 4M3 12h5m8 0h5"/><circle cx="12" cy="12" r="4"/></svg></span><span class="effect-copy"><strong>8D / Auto-pan</strong><small>Slow stereo movement</small></span><span data-state-label>Off</span></button>
+      <div class="panel-note">A deliberately small set of optional effects. Protection stays earlier in the signal path, and every processor input is physically disconnected while its effect is off.</div>
+    </div>
+  </section>
+
+  <section id="pitchPanel" class="floating-panel" data-default-left="286" data-default-top="92" hidden>
+    <header class="floating-head"><span class="floating-head-title"><button class="panel-back-button" data-back-effects type="button" aria-label="Back to Effects" title="Back to Effects">‹</button><span>Pitch Down</span></span><button data-close="pitchPanel" aria-label="Close">×</button></header>
+    <div class="floating-body">
+      <div class="row-between"><div><span class="field-title">Processing</span><div class="field-subtitle">Realtime downward pitch shift</div></div><label class="switch"><input id="pitchEnabled" type="checkbox"><span></span></label></div>
+      <label class="slider-field"><span>Semitones <output id="pitchSemitonesReadout">0 st</output></span><input id="pitchSemitones" type="range" min="-12" max="0" step="1"><small>0 = original tone. Move left to lower pitch without changing playback speed.</small></label>
+      <div class="latency-chip">Added DSP latency <strong id="pitchLatencyReadout">~48 ms @ 48 kHz</strong></div>
+      <div class="panel-note">Only downward shifting is supported. The upward mode was removed after listening tests showed unacceptable robotic coloration on speech.</div>
+    </div>
+  </section>
+
+  <section id="reverbPanel" class="floating-panel" data-default-left="320" data-default-top="115" hidden>
+    <header class="floating-head"><span class="floating-head-title"><button class="panel-back-button" data-back-effects type="button" aria-label="Back to Effects" title="Back to Effects">‹</button><span>Reverb</span></span><button data-close="reverbPanel" aria-label="Close">×</button></header>
+    <div class="floating-body">
+      <div class="row-between"><div><span class="field-title">Processing</span><div class="field-subtitle">Synthetic local impulse response</div></div><label class="switch"><input id="reverbEnabled" type="checkbox"><span></span></label></div>
+      <div id="reverbTypeOptions" class="segmented"><button type="button" data-reverb-type="room">Room</button><button type="button" data-reverb-type="hall">Hall</button><button type="button" data-reverb-type="plate">Plate</button></div>
+      <label class="slider-field"><span>Mix <output id="reverbMixReadout">22%</output></span><input id="reverbMix" type="range" min="0" max="100" step="1"></label>
+      <div class="panel-note">IR data is generated inside KopelaEQ; no remote or third-party audio assets are loaded.</div>
+    </div>
+  </section>
+
+
+  <section id="autoPanPanel" class="floating-panel" data-default-left="380" data-default-top="160" hidden>
+    <header class="floating-head"><span class="floating-head-title"><button class="panel-back-button" data-back-effects type="button" aria-label="Back to Effects" title="Back to Effects">‹</button><span>8D / Auto-pan</span></span><button data-close="autoPanPanel" aria-label="Close">×</button></header>
+    <div class="floating-body">
+      <div class="row-between"><div><span class="field-title">Processing</span><div class="field-subtitle">LFO-controlled stereo movement</div></div><label class="switch"><input id="autoPanEnabled" type="checkbox"><span></span></label></div>
+      <label class="slider-field"><span>Rate <output id="autoPanRateReadout">0.18 Hz</output></span><input id="autoPanRate" type="range" min="0.03" max="4" step="0.01"></label>
+      <label class="slider-field"><span>Depth <output id="autoPanDepthReadout">45%</output></span><input id="autoPanDepth" type="range" min="0" max="100" step="1"></label>
+    </div>
+  </section>
+
+
+  <section id="meterPanel" class="floating-panel meter-panel" data-default-left="354" data-default-top="24" hidden>
     <header class="floating-head">
-      <span>METER</span>
+      <span class="floating-head-title"><button class="panel-back-button workspace-back" data-back-workspace type="button" aria-label="Back" title="Back">‹</button><span>Meter</span></span>
       <div class="floating-head-actions"><button id="meterHoldReset" type="button" aria-label="Reset peak hold" title="Reset peak hold">↺</button><button data-close="meterPanel" aria-label="Close">×</button></div>
     </header>
     <div class="floating-body meter-body">
@@ -202,7 +400,7 @@
           <button type="button" data-spectrum-mode="smooth">Smooth</button>
         </div>
       </div>
-      <div class="panel-note">Pre shows the signal entering Protection. Post is the final output. Peak is sample-peak, not inter-sample true peak. Metering remains side-chain only and disconnects when unused.</div>
+      <div class="panel-note">Pre = limiter input · Post = limiter output · Spectrum = final output. Sample-peak metering; side-chain only.</div>
     </div>
   </section>
 

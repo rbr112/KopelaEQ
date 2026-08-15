@@ -1,6 +1,6 @@
 import { MAX_IMPORT_BYTES, MAX_PRESETS, BUNDLED_PRESET_RENAMES, SCHEMA_VERSION } from './constants.js';
 import type { AudioState, Preset, PresetMap } from './types.js';
-import { clone, isLegacyPreset, normalizeAudioState, normalizeStereo } from './state.js';
+import { clone, isLegacyPreset, normalizeAudioState, normalizeStereo, normalizeReverb, normalizeDelay, normalizeAutoPan, normalizeExciter, normalizePitchShift } from './state.js';
 
 const RESERVED_PRESET_NAMES = new Set(['__proto__', 'prototype', 'constructor']);
 
@@ -73,6 +73,11 @@ export function presetToAudioState(preset: unknown): AudioState {
     ? record.dynamics as Record<string, unknown> : {};
   state.dynamics.enabled = dynamics.enabled === true;
   state.stereo = normalizeStereo(null);
+  state.reverb = normalizeReverb(null);
+  state.delay = normalizeDelay(null);
+  state.autoPan = normalizeAutoPan(null);
+  state.exciter = normalizeExciter(null);
+  state.pitchShift = normalizePitchShift(null);
   return state;
 }
 

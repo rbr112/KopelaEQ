@@ -1,6 +1,6 @@
 import type { CompressorParams, EqFilterType, ProtectionMode } from './types.js';
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 export const EQ_BANDS = 11;
 export const DEFAULT_FREQUENCIES = [20, 40, 80, 160, 320, 640, 1280, 2560, 5120, 10240, 20000] as const;
 export const DEFAULT_Q = 0.7071;
@@ -28,7 +28,14 @@ export const STORAGE = Object.freeze({
   VISUALIZER: 'kopelaeq.visualizer',
   SPECTRUM_MODE: 'kopelaeq.spectrumMode',
   SELECTED_PRESETS: 'kopelaeq.selectedPresets',
-  AUDIO_BASELINE_VERSION: 'kopelaeq.audioBaselineVersion'
+  AUDIO_BASELINE_VERSION: 'kopelaeq.audioBaselineVersion',
+  APPEARANCE: 'kopelaeq.appearance',
+  CUSTOM_THEMES: 'kopelaeq.customThemes',
+  SURFACE_OVERRIDES: 'kopelaeq.surfaceOverrides',
+  MEDIA_HINTS: 'kopelaeq.mediaHints',
+  MEDIA_ARTWORK_JOURNAL: 'kopelaeq.mediaArtworkJournal',
+  MEDIA_BACKGROUND_JOURNAL: 'kopelaeq.mediaBackgroundJournal',
+  PRELOADED_MEDIA_VERSION: 'kopelaeq.preloadedMediaVersion'
 } as const);
 
 export const PROTECTION_PROFILES: Readonly<Record<ProtectionMode, Readonly<CompressorParams> | null>> = Object.freeze({

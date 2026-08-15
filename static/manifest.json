@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "KopelaEQ",
-  "version": "1.22.1",
+  "version": "1.28.8",
   "minimum_chrome_version": "116",
-  "description": "Real-time current-tab audio processor with parametric EQ, optional dynamics, metering, presets, and output protection.",
+  "description": "Real-time tab audio processor with parametric EQ, stereo tools, down-pitch, reverb/8D, meters, presets, dynamics, and protection.",
   "permissions": [
     "activeTab",
     "tabCapture",

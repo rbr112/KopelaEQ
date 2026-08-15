@@ -16,4 +16,4 @@ await rm(ext, { recursive: true, force: true });
 await mkdir(join(ext, 'js'), { recursive: true });
 await cp(stat, ext, { recursive: true });
 execFileSync('tsc', ['-p', join(root, 'tsconfig.json')], { cwd: root, stdio: 'inherit' });
-console.log('Built browser-native ESM modules with TypeScript 5.8.3.');
+console.log('Built browser-native ESM modules with TypeScript 5.8.3 (including typed AudioWorklet module).');

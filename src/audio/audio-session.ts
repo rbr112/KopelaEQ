@@ -4,6 +4,8 @@ import {
 } from '../shared/index.js';
 import type { AudioState, CompressorParams, MeterSnapshot, ProtectionMode, SpectrumMode, StereoMeterSnapshot } from '../shared/types.js';
 import { BypassGate } from './bypass-gate.js';
+import { StereoStage } from './stereo-stage.js';
+import { AutoPanStage, ReverbStage } from './effect-stages.js';
 
 interface DynamicsBand {
   filters: BiquadFilterNode[];
@@ -20,6 +22,8 @@ export interface AudioSessionHealth {
 export interface AudioSessionOptions {
   onEnded?: (tabId: number) => void | Promise<void>;
   onHealthChange?: (tabId: number, health: AudioSessionHealth) => void | Promise<void>;
+  /** True only after offscreen loaded pitch-worklet-processor.js into this context. */
+  pitchWorkletReady?: boolean;
 }
 
 export function safeDisconnect(node: AudioNode | null | undefined, destination?: AudioNode): void {
@@ -68,6 +72,22 @@ function dynamicsChanged(a: AudioState, b: AudioState): boolean {
     || x.lowCrossoverHz !== y.lowCrossoverHz || x.highCrossoverHz !== y.highCrossoverHz;
 }
 
+function stereoChanged(a: AudioState, b: AudioState): boolean {
+  const x = a.stereo; const y = b.stereo;
+  return x.enabled !== y.enabled || x.width !== y.width || x.balance !== y.balance || x.mono !== y.mono || x.swap !== y.swap;
+}
+function reverbChanged(a: AudioState, b: AudioState): boolean {
+  const x = a.reverb; const y = b.reverb;
+  return x.enabled !== y.enabled || x.mix !== y.mix || x.type !== y.type;
+}
+function autoPanChanged(a: AudioState, b: AudioState): boolean {
+  const x = a.autoPan; const y = b.autoPan;
+  return x.enabled !== y.enabled || x.rateHz !== y.rateHz || x.depth !== y.depth;
+}
+function pitchChanged(a: AudioState, b: AudioState): boolean {
+  return a.pitchShift.enabled !== b.pitchShift.enabled || a.pitchShift.semitones !== b.pitchShift.semitones;
+}
+
 export class AudioSession {
   readonly context: AudioContext;
   readonly tabId: number;
@@ -85,6 +105,13 @@ export class AudioSession {
   private readonly masterGain: GainNode;
   private readonly eqFilters: BiquadFilterNode[];
 
+  private readonly pitchIn: GainNode;
+  private readonly pitchDry: GainNode;
+  private readonly pitchWet: GainNode;
+  private readonly pitchOut: GainNode;
+  private pitchNode: AudioWorkletNode | null = null;
+  private readonly pitchGate: BypassGate;
+
   private readonly dynamicsIn: GainNode;
   private readonly dynamicsDry: GainNode;
   private readonly dynamicsWet: GainNode;
@@ -95,12 +122,17 @@ export class AudioSession {
   private readonly high: DynamicsBand;
   private readonly dynamicsGate: BypassGate;
 
+  private readonly stereoStage: StereoStage;
+
   private readonly protectionIn: GainNode;
   private readonly protectionDry: GainNode;
   private readonly protectionWet: GainNode;
   private readonly protectionOut: GainNode;
   private readonly limiter: DynamicsCompressorNode;
   private readonly protectionGate: BypassGate;
+
+  private readonly reverbStage: ReverbStage;
+  private readonly autoPanStage: AutoPanStage;
 
   private readonly spectrumAnalyser: AnalyserNode;
   private readonly preMeterSplitter: ChannelSplitterNode;
@@ -137,6 +169,11 @@ export class AudioSession {
       return filter;
     });
 
+    this.pitchIn = context.createGain();
+    this.pitchDry = context.createGain();
+    this.pitchWet = context.createGain();
+    this.pitchOut = context.createGain();
+
     this.dynamicsIn = context.createGain();
     this.dynamicsDry = context.createGain();
     this.dynamicsWet = context.createGain();
@@ -146,11 +183,16 @@ export class AudioSession {
     this.mid = this.createBand('mid');
     this.high = this.createBand('high');
 
+    this.stereoStage = new StereoStage(context);
+
     this.protectionIn = context.createGain();
     this.protectionDry = context.createGain();
     this.protectionWet = context.createGain();
     this.protectionOut = context.createGain();
     this.limiter = context.createDynamicsCompressor();
+
+    this.reverbStage = new ReverbStage(context);
+    this.autoPanStage = new AutoPanStage(context);
 
     this.spectrumAnalyser = context.createAnalyser();
     this.spectrumAnalyser.fftSize = 8192;
@@ -175,6 +217,10 @@ export class AudioSession {
     this.freqData = new Float32Array(this.spectrumAnalyser.frequencyBinCount);
 
     this.wireGraph();
+    this.pitchGate = new BypassGate(context, this.pitchDry, this.pitchWet, {
+      connectInput: () => this.connectPitchProcessorInput(),
+      disconnectInput: () => this.disconnectPitchProcessorInput()
+    });
     this.dynamicsGate = new BypassGate(context, this.dynamicsDry, this.dynamicsWet, {
       connectInput: () => this.connectDynamicsProcessorInput(),
       disconnectInput: () => this.disconnectDynamicsProcessorInput()
@@ -183,6 +229,10 @@ export class AudioSession {
       connectInput: () => this.connectProtectionProcessorInput(),
       disconnectInput: () => this.disconnectProtectionProcessorInput()
     });
+
+    if (options.pitchWorkletReady && this.state.pitchShift.enabled && Math.abs(this.state.pitchShift.semitones) > 0.0001) {
+      this.ensurePitchProcessor();
+    }
     this.applyState(this.state, true);
     this.applyProtection(this.protection, true);
 
@@ -192,7 +242,6 @@ export class AudioSession {
       this.audioTrack.addEventListener('unmute', () => { void this.emitHealthChange(); });
     }
   }
-
 
   health(): AudioSessionHealth {
     return {
@@ -239,11 +288,16 @@ export class AudioSession {
     for (const filter of this.eqFilters) { node.connect(filter); node = filter; }
     node.connect(this.masterGain);
 
-    this.masterGain.connect(this.dynamicsIn);
+    // Pitch is the only latency-bearing stage and lives after Gain/EQ, before Dynamics.
+    this.masterGain.connect(this.pitchIn);
+    this.pitchIn.connect(this.pitchDry);
+    this.pitchDry.connect(this.pitchOut);
+    this.pitchWet.connect(this.pitchOut);
+    this.pitchOut.connect(this.dynamicsIn);
+
     this.dynamicsIn.connect(this.dynamicsDry);
     this.dynamicsDry.connect(this.dynamicsOut);
     this.dynamicsWet.connect(this.dynamicsOut);
-
     this.normalCompressor.connect(this.dynamicsWet);
     for (const band of [this.low, this.mid, this.high]) {
       for (let i = 0; i < band.filters.length - 1; i += 1) band.filters[i].connect(band.filters[i + 1]);
@@ -251,17 +305,62 @@ export class AudioSession {
       band.compressor.connect(this.dynamicsWet);
     }
 
-    this.dynamicsOut.connect(this.protectionIn);
+    // Stereo deliberately sits after Dynamics and before Protection so widening
+    // peaks are visible to (and constrained by) the existing limiter stage.
+    this.dynamicsOut.connect(this.stereoStage.input);
+    this.stereoStage.output.connect(this.protectionIn);
+
     this.protectionIn.connect(this.protectionDry);
     this.protectionDry.connect(this.protectionOut);
     this.protectionWet.connect(this.protectionOut);
     this.limiter.connect(this.protectionWet);
-    this.protectionOut.connect(this.context.destination);
+
+    // Delay and Exciter remain in the serialized schema for backward compatibility,
+    // but their runtime stages were retired because normalization permanently disables them.
+    this.protectionOut.connect(this.reverbStage.input);
+    this.reverbStage.output.connect(this.autoPanStage.input);
+    this.autoPanStage.output.connect(this.context.destination);
 
     this.preMeterSplitter.connect(this.preLeftAnalyser, 0);
     this.preMeterSplitter.connect(this.preRightAnalyser, 1);
     this.meterSplitter.connect(this.leftAnalyser, 0);
     this.meterSplitter.connect(this.rightAnalyser, 1);
+  }
+
+  /** Creates the worklet node only after offscreen has loaded its same-origin module. */
+  ensurePitchProcessor(): void {
+    if (this.pitchNode || this.disposed) return;
+    if (typeof AudioWorkletNode !== 'function') throw new Error('AudioWorklet is unavailable in this browser context.');
+    const node = new AudioWorkletNode(this.context, 'kopelaeq-pitch-shift', {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      outputChannelCount: [2],
+      channelCount: 2,
+      channelCountMode: 'explicit'
+    });
+    node.connect(this.pitchWet);
+    this.pitchNode = node;
+    const semitones = node.parameters.get('semitones');
+    if (semitones) semitones.value = this.state.pitchShift.semitones;
+  }
+
+  private disconnectPitchProcessorInput(): void {
+    if (this.pitchNode) safeDisconnect(this.pitchIn, this.pitchNode);
+  }
+
+  private connectPitchProcessorInput(): void {
+    this.disconnectPitchProcessorInput();
+    if (this.pitchNode) this.pitchIn.connect(this.pitchNode);
+  }
+
+  private applyPitch(immediate: boolean): void {
+    const active = this.state.pitchShift.enabled && Math.abs(this.state.pitchShift.semitones) > 0.0001 && Boolean(this.pitchNode);
+    const semitones = this.pitchNode?.parameters.get('semitones');
+    if (semitones) {
+      if (immediate) semitones.value = this.state.pitchShift.semitones;
+      else smooth(semitones, this.state.pitchShift.semitones, this.context, 0.018);
+    }
+    this.pitchGate.setEnabled(active, immediate);
   }
 
   private disconnectDynamicsProcessorInput(): void {
@@ -273,7 +372,6 @@ export class AudioSession {
 
   private connectDynamicsProcessorInput(): void {
     this.disconnectDynamicsProcessorInput();
-    // Topology stays inside Dynamics: BypassGate only controls when input is live.
     if (this.state.dynamics.mode === 'multiband') {
       this.dynamicsIn.connect(this.low.filters[0]);
       this.dynamicsIn.connect(this.mid.filters[0]);
@@ -334,6 +432,8 @@ export class AudioSession {
       }
     }
 
+    if (immediate || pitchChanged(previous, normalized)) this.applyPitch(immediate);
+
     if (immediate || dynamicsChanged(previous, normalized)) {
       const previousEnabled = previous.dynamics.enabled && previous.dynamics.amount > 0.0001;
       const nextEnabled = this.dynamicsEnabled();
@@ -343,6 +443,10 @@ export class AudioSession {
       if (!immediate && previousEnabled && nextEnabled && topologyChanged) this.dynamicsGate.refresh(false);
       else this.dynamicsGate.setEnabled(nextEnabled, immediate);
     }
+
+    if (immediate || stereoChanged(previous, normalized)) this.stereoStage.apply(normalized.stereo, immediate);
+    if (immediate || reverbChanged(previous, normalized)) this.reverbStage.apply(normalized.reverb, immediate);
+    if (immediate || autoPanChanged(previous, normalized)) this.autoPanStage.apply(normalized.autoPan, immediate);
   }
 
   private disconnectProtectionProcessorInput(): void { safeDisconnect(this.protectionIn, this.limiter); }
@@ -370,7 +474,6 @@ export class AudioSession {
   private setLevelMeteringConnected(enabled: boolean): void {
     if (enabled === this.levelMeteringConnected) return;
     if (enabled) {
-      // Side-chain only: neither splitter/analyser chain connects to destination.
       this.protectionIn.connect(this.preMeterSplitter);
       this.protectionOut.connect(this.meterSplitter);
     } else {
@@ -382,8 +485,8 @@ export class AudioSession {
 
   private setSpectrumMeteringConnected(enabled: boolean): void {
     if (enabled === this.spectrumMeteringConnected) return;
-    if (enabled) this.protectionOut.connect(this.spectrumAnalyser);
-    else safeDisconnect(this.protectionOut, this.spectrumAnalyser);
+    if (enabled) this.autoPanStage.output.connect(this.spectrumAnalyser);
+    else safeDisconnect(this.autoPanStage.output, this.spectrumAnalyser);
     this.spectrumMeteringConnected = enabled;
   }
 
@@ -499,19 +602,25 @@ export class AudioSession {
     if (this.disposed) return;
     this.disposed = true;
     this.disconnectMetering();
+    this.pitchGate.dispose();
     this.dynamicsGate.dispose();
     this.protectionGate.dispose();
+    this.stereoStage.dispose();
+    this.reverbStage.dispose();
+    this.autoPanStage.dispose();
     for (const track of this.stream.getTracks()) {
       try { track.stop(); } catch { /* no-op */ }
     }
 
     for (const node of [
       this.source, this.inputGain, this.masterGain, ...this.eqFilters,
+      this.pitchIn, this.pitchDry, this.pitchWet, this.pitchOut, this.pitchNode,
       this.dynamicsIn, this.dynamicsDry, this.dynamicsWet, this.dynamicsOut,
       this.normalCompressor, ...this.low.filters, this.low.compressor,
       ...this.mid.filters, this.mid.compressor, ...this.high.filters, this.high.compressor,
       this.protectionIn, this.protectionDry, this.protectionWet, this.protectionOut,
-      this.limiter, this.spectrumAnalyser, this.preMeterSplitter, this.preLeftAnalyser, this.preRightAnalyser, this.meterSplitter, this.leftAnalyser, this.rightAnalyser
+      this.limiter, this.spectrumAnalyser, this.preMeterSplitter, this.preLeftAnalyser, this.preRightAnalyser,
+      this.meterSplitter, this.leftAnalyser, this.rightAnalyser
     ]) safeDisconnect(node);
   }
 }

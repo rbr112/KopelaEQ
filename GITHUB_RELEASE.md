@@ -1,52 +1,36 @@
-# KopelaEQ v1.22.0
+# KopelaEQ 1.28.8
 
-The first frozen public-release baseline of **KopelaEQ** — a real-time parametric EQ and audio-processing extension for Chromium tabs.
+Async/concurrency and MV3 lifecycle hardening release. DSP tuning and the frozen EQ baseline are unchanged.
 
-## Highlights
+## Fixed
 
-- **11-band parametric EQ** — Low Shelf + 9 Peak bands + High Shelf
-- **Bundled and user presets** with import/export and full preset management
-- **Optional Dynamics** with click-free true bypass
-- **Output Protection** with Light / Medium / Strong modes
-- **Pre/Post Protection Meter** with Peak, RMS, Peak Hold and gain reduction
-- **Spectrum analyser** with Fast / Balanced / Smooth response modes
-- **Per-tab Manifest V3 capture lifecycle** with safe Start/Stop handling
-- **Strict TypeScript + native ESM** architecture
-- **Local audio processing** — KopelaEQ does not intentionally upload captured tab audio
-- **Deterministic release archives** with SHA-256 verification
+- AudioState and Protection are now background-owned, revisioned and latest-wins; rapid input cannot leave UI/storage/audio on different values.
+- Slow background storage startup uses temporary non-authoritative defaults, retains/retries the real read, and rejects late snapshots after newer user intent.
+- Popup and offscreen async responses are generation/revision guarded after `await`.
+- Realtime state persistence no longer depends on popup debounce/close timing.
+- Shared offscreen create/close is globally serialized and protected by `desiredTabs` against cross-tab close/start races.
+- Rice/Nocturne identity writes are latest-wins.
+- Artwork/background IndexedDB + hint changes use a recovery journal; custom-theme deletion commits registry removal before media destruction.
+- Fire-and-forget UI async paths use a single error sink instead of producing unhandled promise rejections.
+- Delay/Exciter runtime stages and unnecessary AudioNodes are removed while their disabled schema fields remain for compatibility.
+- Pitch Worklet source is TypeScript and has a fake-AudioWorklet integration test.
 
-## Audio compatibility
+## QA
 
-The accepted 1.22.0 EQ response is protected by browser-native golden tests at **44.1 kHz and 48 kHz**.
-
-Release-hardening changes do not intentionally retune EQ, Dynamics or Protection. The final automated golden-response comparison reports **0 dB maximum difference** from the frozen reference.
-
-## Install
-
-1. Download `kopelaeq-1.22.0.zip` below.
-2. Extract it.
-3. Open `chrome://extensions`.
-4. Enable **Developer mode**.
-5. Choose **Load unpacked** and select the extracted folder.
-6. Open a normal tab with audio and enable **Audio On** in KopelaEQ.
+- 33/33 Node regression suites pass.
+- Adversarial StateSet burst: 24 inputs -> 2 storage + 2 runtime writes, final newest state.
+- Protection delayed-write race, slow authoritative startup, stale startup response, stale Worklet response, Appearance race, media journal recovery and cross-tab offscreen lifecycle tests pass.
+- Isolated Playwright UI QA passes.
+- Golden EQ response: 0 dB difference at 44.1/48 kHz.
+- Meter sidechain and disabled-stage dry paths: 0 sample delta.
+- DSP crossover and Stereo math pass.
+- Headless Chromium still lacks `audioWorklet.addModule`; unpacked Chrome Stable Pitch listening/soak remains a manual gate.
 
 ## Release files
 
-- **`kopelaeq-1.22.0.zip`** — ready-to-load Chrome/Chromium extension
-- **`kopelaeq-1.22.0-source.zip`** — source, tests, QA and release tooling
-- **`SHA256SUMS.txt`** — release checksums
+- `kopelaeq-1.28.8.zip` — Chrome/Chromium release package
+- `kopelaeq-1.28.8-source.zip` — source, tests, QA and release tooling
+- `kopelaeq-next-chat-full-1.28.8.zip` — clean continuation bundle
+- `SHA256SUMS.txt` — release hashes
 
-### SHA-256
-
-```text
-8f182ac7e2303f12f57f2350f77fe37d685abc18d49456237d457de676fb5b7a  kopelaeq-1.22.0.zip
-dee8aa3b1d0d982ec7db8193212495ab4813329b1690e21be3724caabc6d5956  kopelaeq-1.22.0-source.zip
-```
-
-## Documentation
-
-See the repository for the [README](README.md), [Privacy Policy](PRIVACY.md), [Security Policy](SECURITY.md), [Architecture](ARCHITECTURE.md), [QA Report](QA_REPORT.md) and [Changelog](CHANGELOG.md).
-
----
-
-**Maintained by Kopela.**
+See `README.md`, `RELEASE_NOTES_1.28.8.md`, `QA_REPORT.md`, and `RELEASE_CHECKLIST.md`.

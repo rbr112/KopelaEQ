@@ -1,6 +1,7 @@
 interface ChromeTab {
   id?: number;
   url?: string;
+  title?: string;
   active?: boolean;
   audible?: boolean;
   windowId?: number;
@@ -99,3 +100,29 @@ interface ChromeNamespace {
 }
 
 declare const chrome: ChromeNamespace;
+
+
+interface AudioWorkletParameterDescriptor {
+  name: string;
+  defaultValue?: number;
+  minValue?: number;
+  maxValue?: number;
+  automationRate?: 'a-rate' | 'k-rate';
+}
+
+declare abstract class AudioWorkletProcessor {
+  readonly port: MessagePort;
+  constructor();
+  static readonly parameterDescriptors?: readonly AudioWorkletParameterDescriptor[];
+  abstract process(
+    inputs: Float32Array[][],
+    outputs: Float32Array[][],
+    parameters: Record<string, Float32Array>
+  ): boolean;
+}
+
+declare const sampleRate: number;
+declare function registerProcessor(
+  name: string,
+  processorCtor: new () => AudioWorkletProcessor
+): void;

@@ -20,8 +20,8 @@ export type BackgroundMessage =
   | { type: typeof MessageType.CaptureStart; tabId?: number | null }
   | { type: typeof MessageType.CaptureStop; tabId?: number | null }
   | { type: typeof MessageType.StatusGet; tabId?: number | null }
-  | { type: typeof MessageType.StateSet; tabId?: number | null; state: unknown; persist?: boolean; presetSelection?: unknown }
-  | { type: typeof MessageType.ProtectionSet; protection: unknown }
+  | { type: typeof MessageType.StateSet; tabId?: number | null; state: unknown; persist?: boolean; presetSelection?: unknown; revision?: number }
+  | { type: typeof MessageType.ProtectionSet; protection: unknown; revision?: number }
   | { type: typeof MessageType.PresetSelectionGet; tabId?: number | null }
   | { type: typeof MessageType.PresetSelectionSet; tabId?: number | null; name: unknown }
   | { type: typeof MessageType.MeterGet; tabId?: number | null; spectrum?: boolean; spectrumMode?: SpectrumMode; levels?: boolean }
@@ -29,11 +29,11 @@ export type BackgroundMessage =
   | { type: typeof MessageType.SessionHealthChanged; tabId: number; trackMuted: boolean; trackReadyState?: MediaStreamTrackState | null; contextState?: AudioContextState | null };
 
 export type OffscreenMessage =
-  | { target: 'offscreen'; type: typeof MessageType.CaptureStart; tabId: number; streamId: string; state: AudioState; protection: ProtectionMode }
+  | { target: 'offscreen'; type: typeof MessageType.CaptureStart; tabId: number; streamId: string; state: AudioState; protection: ProtectionMode; stateRevision: number; protectionRevision: number }
   | { target: 'offscreen'; type: typeof MessageType.CaptureStop; tabId: number }
   | { target: 'offscreen'; type: typeof MessageType.SessionStatus; tabId?: number }
-  | { target: 'offscreen'; type: typeof MessageType.StateSet; tabId?: number; state: AudioState }
-  | { target: 'offscreen'; type: typeof MessageType.ProtectionSet; protection: ProtectionMode }
+  | { target: 'offscreen'; type: typeof MessageType.StateSet; tabId?: number; state: AudioState; revision?: number }
+  | { target: 'offscreen'; type: typeof MessageType.ProtectionSet; protection: ProtectionMode; revision?: number }
   | { target: 'offscreen'; type: typeof MessageType.MeterGet; tabId: number; spectrum?: boolean; spectrumMode?: SpectrumMode; levels?: boolean };
 
 export type RuntimeMessage = BackgroundMessage | OffscreenMessage;
@@ -51,6 +51,10 @@ export interface StatusResponse extends BaseResponse {
   trackMuted?: boolean | null;
   trackEnabled?: boolean | null;
   contextState?: AudioContextState | null;
+  stateAuthoritative?: boolean;
+  protectionAuthoritative?: boolean;
+  stateRevision?: number;
+  protectionRevision?: number;
 }
 export interface PresetSelectionResponse extends BaseResponse { name?: string; presetSelection?: string; }
 export interface MeterResponse extends BaseResponse { active?: boolean; meter?: MeterSnapshot | null; }
@@ -65,14 +69,16 @@ export interface SessionStatusResponse extends BaseResponse {
   trackMuted?: boolean | null;
   trackEnabled?: boolean | null;
   contextState?: AudioContextState | null;
+  stateRevision?: number;
+  protectionRevision?: number;
 }
 
 export type ResponseFor<M extends BackgroundMessage> =
   M extends { type: typeof MessageType.StatusGet } ? StatusResponse :
   M extends { type: typeof MessageType.MeterGet } ? MeterResponse :
   M extends { type: typeof MessageType.PresetSelectionGet | typeof MessageType.PresetSelectionSet } ? PresetSelectionResponse :
-  M extends { type: typeof MessageType.StateSet } ? BaseResponse & { state?: AudioState; presetSelection?: string } :
-  M extends { type: typeof MessageType.ProtectionSet } ? BaseResponse & { protection?: ProtectionMode } :
+  M extends { type: typeof MessageType.StateSet } ? BaseResponse & { state?: AudioState; presetSelection?: string; revision?: number } :
+  M extends { type: typeof MessageType.ProtectionSet } ? BaseResponse & { protection?: ProtectionMode; revision?: number } :
   CaptureResponse;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -108,9 +114,11 @@ export function parseBackgroundMessage(input: unknown): BackgroundMessage | null
     case MessageType.StateSet:
       if (!Object.prototype.hasOwnProperty.call(input, 'state')) return null;
       if (input.persist !== undefined && typeof input.persist !== 'boolean') return null;
+      if (input.revision !== undefined && (!Number.isInteger(Number(input.revision)) || Number(input.revision) < 0)) return null;
       return input as BackgroundMessage;
     case MessageType.ProtectionSet:
       if (!Object.prototype.hasOwnProperty.call(input, 'protection')) return null;
+      if (input.revision !== undefined && (!Number.isInteger(Number(input.revision)) || Number(input.revision) < 0)) return null;
       return input as BackgroundMessage;
     case MessageType.PresetSelectionSet:
       if (!Object.prototype.hasOwnProperty.call(input, 'name')) return null;
@@ -140,6 +148,10 @@ export function parseOffscreenMessage(input: unknown): OffscreenMessage | null {
       if (!Number.isInteger(Number(input.tabId))) return null;
       if (!Object.prototype.hasOwnProperty.call(input, 'state')) return null;
       if (!Object.prototype.hasOwnProperty.call(input, 'protection')) return null;
+      // CAPTURE_START is an internal, revisioned mutation. Revisions are mandatory so
+      // a future caller cannot bypass latest-wins ordering with an implicit fallback.
+      if (!Number.isInteger(Number(input.stateRevision)) || Number(input.stateRevision) < 0) return null;
+      if (!Number.isInteger(Number(input.protectionRevision)) || Number(input.protectionRevision) < 0) return null;
       return input as OffscreenMessage;
     case MessageType.CaptureStop:
       return Number.isInteger(Number(input.tabId)) ? input as OffscreenMessage : null;
@@ -148,9 +160,13 @@ export function parseOffscreenMessage(input: unknown): OffscreenMessage | null {
     case MessageType.SessionStatus:
       return input as OffscreenMessage;
     case MessageType.StateSet:
-      return Object.prototype.hasOwnProperty.call(input, 'state') ? input as OffscreenMessage : null;
+      if (!Object.prototype.hasOwnProperty.call(input, 'state')) return null;
+      if (input.revision !== undefined && (!Number.isInteger(Number(input.revision)) || Number(input.revision) < 0)) return null;
+      return input as OffscreenMessage;
     case MessageType.ProtectionSet:
-      return Object.prototype.hasOwnProperty.call(input, 'protection') ? input as OffscreenMessage : null;
+      if (!Object.prototype.hasOwnProperty.call(input, 'protection')) return null;
+      if (input.revision !== undefined && (!Number.isInteger(Number(input.revision)) || Number(input.revision) < 0)) return null;
+      return input as OffscreenMessage;
     default:
       return null;
   }

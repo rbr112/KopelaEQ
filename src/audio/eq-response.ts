@@ -11,6 +11,10 @@ function normalizeSampleRate(sampleRate: unknown): number {
 export class NativeEqResponse {
   private context: OfflineAudioContext | null = null;
   private nodes: BiquadFilterNode[] = [];
+  private validFrequencies = new Float32Array(0);
+  private magnitude = new Float32Array(0);
+  private phase = new Float32Array(0);
+  private combined = new Float64Array(0);
   sampleRate = 0;
 
   constructor(sampleRate = DEFAULT_SAMPLE_RATE) {
@@ -41,36 +45,43 @@ export class NativeEqResponse {
     }
   }
 
+  private ensureScratch(length: number): void {
+    if (this.validFrequencies.length === length) return;
+    this.validFrequencies = new Float32Array(length);
+    this.magnitude = new Float32Array(length);
+    this.phase = new Float32Array(length);
+    this.combined = new Float64Array(length);
+  }
+
   private validFrequencyArray(frequencies: ArrayLike<number>): Float32Array {
+    this.ensureScratch(frequencies.length);
     const nyquist = this.sampleRate / 2;
-    const valid = new Float32Array(frequencies.length);
     for (let i = 0; i < frequencies.length; i += 1) {
       const value = Number(frequencies[i]);
-      valid[i] = Number.isFinite(value) && value >= 0 && value <= nyquist ? value : NaN;
+      this.validFrequencies[i] = Number.isFinite(value) && value >= 0 && value <= nyquist ? value : NaN;
     }
-    return valid;
+    return this.validFrequencies;
   }
 
   combinedDb(frequencies: ArrayLike<number>, eq: EqState): Float64Array {
     this.configure(eq);
     const freq = this.validFrequencyArray(frequencies);
-    const combined = new Float64Array(freq.length);
-    combined.fill(1);
-    const magnitude = new Float32Array(freq.length);
-    const phase = new Float32Array(freq.length);
+    this.combined.fill(1);
 
     for (const node of this.nodes) {
-      node.getFrequencyResponse(freq, magnitude, phase);
-      for (let i = 0; i < combined.length; i += 1) {
-        const mag = magnitude[i];
-        if (!Number.isFinite(mag)) combined[i] = NaN;
-        else if (Number.isFinite(combined[i])) combined[i] *= mag;
+      node.getFrequencyResponse(freq, this.magnitude, this.phase);
+      for (let i = 0; i < this.combined.length; i += 1) {
+        const mag = this.magnitude[i];
+        if (!Number.isFinite(mag)) this.combined[i] = NaN;
+        else if (Number.isFinite(this.combined[i])) this.combined[i] *= mag;
       }
     }
 
-    const result = new Float64Array(combined.length);
-    for (let i = 0; i < combined.length; i += 1) {
-      const value = combined[i];
+    // Return a fresh result because callers may retain it. The larger scratch
+    // buffers above are reused across frames to avoid repeated GC pressure.
+    const result = new Float64Array(this.combined.length);
+    for (let i = 0; i < this.combined.length; i += 1) {
+      const value = this.combined[i];
       result[i] = Number.isFinite(value) ? 20 * Math.log10(Math.max(1e-12, value)) : NaN;
     }
     return result;
@@ -79,12 +90,10 @@ export class NativeEqResponse {
   bandDb(index: number, frequencies: ArrayLike<number>, eq: EqState): Float64Array {
     this.configure(eq);
     const freq = this.validFrequencyArray(frequencies);
-    const magnitude = new Float32Array(freq.length);
-    const phase = new Float32Array(freq.length);
-    this.nodes[index].getFrequencyResponse(freq, magnitude, phase);
+    this.nodes[index].getFrequencyResponse(freq, this.magnitude, this.phase);
     const result = new Float64Array(freq.length);
-    for (let i = 0; i < magnitude.length; i += 1) {
-      const value = magnitude[i];
+    for (let i = 0; i < this.magnitude.length; i += 1) {
+      const value = this.magnitude[i];
       result[i] = Number.isFinite(value) ? 20 * Math.log10(Math.max(1e-12, value)) : NaN;
     }
     return result;
@@ -96,5 +105,9 @@ export class NativeEqResponse {
     }
     this.nodes = [];
     this.context = null;
+    this.validFrequencies = new Float32Array(0);
+    this.magnitude = new Float32Array(0);
+    this.phase = new Float32Array(0);
+    this.combined = new Float64Array(0);
   }
 }

@@ -13,10 +13,62 @@ import type { AudioSessionHealth } from '../audio/audio-session.js';
 const sessions = new Map<number, AudioSession>();
 const pendingSessions = new Map<number, Promise<{ ok: true }>>();
 const sessionGeneration = new Map<number, number>();
+const sessionStateRevision = new Map<number, number>();
+const sessionProtectionRevision = new Map<number, number>();
 let audioContext: AudioContext | null = null;
 let globalState: AudioState = normalizeAudioState(null);
 let globalProtection: ProtectionMode = 'strong';
+let globalStateRevision = 0;
+let globalProtectionRevision = 0;
 let contextResumeInFlight: Promise<void> | null = null;
+let pitchWorkletContext: AudioContext | null = null;
+let pitchWorkletLoad: Promise<void> | null = null;
+
+
+function pitchRequested(state: AudioState): boolean {
+  return state.pitchShift.enabled && Math.abs(state.pitchShift.semitones) > 0.0001;
+}
+
+async function ensurePitchWorklet(context: AudioContext): Promise<void> {
+  if (pitchWorkletContext === context) return;
+  if (!context.audioWorklet) throw new Error('AudioWorklet is unavailable in this Chrome build.');
+  if (pitchWorkletLoad) return pitchWorkletLoad;
+  pitchWorkletLoad = context.audioWorklet
+    .addModule(chrome.runtime.getURL('js/audio/pitch-worklet-processor.js'))
+    .then(() => { pitchWorkletContext = context; })
+    .finally(() => { pitchWorkletLoad = null; });
+  return pitchWorkletLoad;
+}
+
+function messageRevision(value: unknown, fallback: number): number {
+  const revision = Number(value);
+  return Number.isInteger(revision) && revision >= 0 ? revision : fallback;
+}
+
+async function applyStateToSession(session: AudioSession, state: AudioState, revision: number): Promise<boolean> {
+  const tabId = session.tabId;
+  const previousRevision = sessionStateRevision.get(tabId) ?? -1;
+  if (revision < previousRevision) return false;
+  // Claim the revision before any await. If a newer request arrives while the
+  // worklet module loads, the post-await guard prevents this request applying.
+  sessionStateRevision.set(tabId, revision);
+  if (pitchRequested(state)) {
+    await ensurePitchWorklet(session.context);
+    if (sessionStateRevision.get(tabId) !== revision) return false;
+    session.ensurePitchProcessor();
+  }
+  if (sessionStateRevision.get(tabId) !== revision) return false;
+  session.applyState(state);
+  return true;
+}
+
+function applyProtectionToSession(session: AudioSession, value: ProtectionMode, revision: number): boolean {
+  const previousRevision = sessionProtectionRevision.get(session.tabId) ?? -1;
+  if (revision < previousRevision) return false;
+  sessionProtectionRevision.set(session.tabId, revision);
+  session.applyProtection(value);
+  return true;
+}
 
 function validTabId(value: unknown): number | null {
   if (value === null || value === undefined || value === '') return null;
@@ -63,6 +115,8 @@ function maybeSuspendContext(): void {
 
 async function handleSessionEnded(tabId: number): Promise<void> {
   sessions.delete(tabId);
+  sessionStateRevision.delete(tabId);
+  sessionProtectionRevision.delete(tabId);
   try { await chrome.runtime.sendMessage({ type: MessageType.SessionEnded, tabId, reason: 'track-ended' }); } catch { /* worker may be restarting */ }
   maybeSuspendContext();
 }
@@ -105,13 +159,28 @@ async function createSession(
       throw new Error('Audio capture was cancelled.');
     }
 
-    globalState = normalizeAudioState(message.state || globalState);
-    globalProtection = normalizeProtection(message.protection || globalProtection);
+    const incomingStateRevision = message.stateRevision;
+    const incomingProtectionRevision = message.protectionRevision;
+    if (incomingStateRevision >= globalStateRevision) {
+      globalState = normalizeAudioState(message.state || globalState);
+      globalStateRevision = incomingStateRevision;
+    }
+    if (incomingProtectionRevision >= globalProtectionRevision) {
+      globalProtection = normalizeProtection(message.protection || globalProtection);
+      globalProtectionRevision = incomingProtectionRevision;
+    }
+    // StateSet may have advanced globalState while getUserMedia was pending.
+    // Always construct from the newest accepted global snapshot.
+    if (pitchRequested(globalState)) await ensurePitchWorklet(context);
+    if (sessionGeneration.get(tabId) !== generation) throw new Error('Audio capture was cancelled.');
     const session = new AudioSession(context, tabId, stream, globalState, globalProtection, {
       onEnded: handleSessionEnded,
-      onHealthChange: handleSessionHealthChange
+      onHealthChange: handleSessionHealthChange,
+      pitchWorkletReady: pitchWorkletContext === context
     });
     sessions.set(tabId, session);
+    sessionStateRevision.set(tabId, globalStateRevision);
+    sessionProtectionRevision.set(tabId, globalProtectionRevision);
     if (context.state === 'suspended') await context.resume();
     return { ok: true };
   } catch (error) {
@@ -130,8 +199,10 @@ async function startSession(message: Extract<OffscreenMessage, { type: typeof Me
 
   const existing = sessions.get(tabId);
   if (existing) {
-    if (message.state) existing.applyState(message.state);
-    if (message.protection) existing.applyProtection(message.protection);
+    const stateRevision = message.stateRevision;
+    const protectionRevision = message.protectionRevision;
+    if (message.state) await applyStateToSession(existing, normalizeAudioState(message.state), stateRevision);
+    if (message.protection) applyProtectionToSession(existing, normalizeProtection(message.protection), protectionRevision);
     return { ok: true, alreadyActive: true };
   }
 
@@ -140,8 +211,10 @@ async function startSession(message: Extract<OffscreenMessage, { type: typeof Me
     await pending;
     const session = sessions.get(tabId);
     if (session) {
-      if (message.state) session.applyState(message.state);
-      if (message.protection) session.applyProtection(message.protection);
+      const stateRevision = message.stateRevision;
+      const protectionRevision = message.protectionRevision;
+      if (message.state) await applyStateToSession(session, normalizeAudioState(message.state), stateRevision);
+      if (message.protection) applyProtectionToSession(session, normalizeProtection(message.protection), protectionRevision);
       return { ok: true, alreadyActive: true };
     }
   }
@@ -165,6 +238,8 @@ function stopSession(tabId: unknown): { ok: true } {
   if (session) {
     session.dispose();
     sessions.delete(id);
+    sessionStateRevision.delete(id);
+    sessionProtectionRevision.delete(id);
   }
   maybeSuspendContext();
   return { ok: true };
@@ -188,6 +263,8 @@ async function handleMessage(message: OffscreenMessage): Promise<Record<string, 
         pendingTabs: [...pendingSessions.keys()],
         state: session ? session.state : null,
         protection: session ? session.protection : globalProtection,
+        stateRevision: session && tabId !== null ? (sessionStateRevision.get(tabId) ?? globalStateRevision) : globalStateRevision,
+        protectionRevision: session && tabId !== null ? (sessionProtectionRevision.get(tabId) ?? globalProtectionRevision) : globalProtectionRevision,
         sampleRate: session ? session.context.sampleRate : (audioContext && audioContext.state !== 'closed' ? audioContext.sampleRate : null),
         trackReadyState: health?.trackReadyState ?? null,
         trackMuted: health?.trackMuted ?? null,
@@ -196,19 +273,31 @@ async function handleMessage(message: OffscreenMessage): Promise<Record<string, 
       };
     }
     case MessageType.StateSet: {
-      globalState = normalizeAudioState(message.state);
+      const revision = messageRevision(message.revision, globalStateRevision + 1);
+      const next = normalizeAudioState(message.state);
+      if (revision >= globalStateRevision) {
+        globalState = next;
+        globalStateRevision = revision;
+      }
       const tabId = validTabId(message.tabId);
       if (tabId !== null) {
         const session = sessions.get(tabId);
-        if (session) session.applyState(globalState);
-        return { ok: true, active: Boolean(session) };
+        if (session) await applyStateToSession(session, next, revision);
+        return { ok: true, active: Boolean(session), revision: globalStateRevision };
       }
-      return { ok: true, active: false };
+      await Promise.all([...sessions.values()].map((session) => applyStateToSession(session, next, revision)));
+      return { ok: true, active: sessions.size > 0, revision: globalStateRevision };
     }
-    case MessageType.ProtectionSet:
-      globalProtection = normalizeProtection(message.protection);
-      for (const session of sessions.values()) session.applyProtection(globalProtection);
-      return { ok: true };
+    case MessageType.ProtectionSet: {
+      const revision = messageRevision(message.revision, globalProtectionRevision + 1);
+      const next = normalizeProtection(message.protection);
+      if (revision >= globalProtectionRevision) {
+        globalProtection = next;
+        globalProtectionRevision = revision;
+      }
+      for (const session of sessions.values()) applyProtectionToSession(session, next, revision);
+      return { ok: true, revision: globalProtectionRevision };
+    }
     case MessageType.MeterGet: {
       await ensureAudioContextRunning();
       const session = sessions.get(validTabId(message.tabId) ?? -1);

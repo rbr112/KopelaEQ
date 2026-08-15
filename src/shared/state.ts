@@ -4,8 +4,8 @@ import {
   Q_MIN, Q_MAX, FREQ_MIN, FREQ_MAX, PROTECTION_PROFILES
 } from './constants.js';
 import type {
-  AudioState, DynamicsState, EqState, StereoCompatibilityState,
-  ProtectionMode, CompressorParams
+  AudioState, AutoPanState, DelayState, DynamicsState, EqState, ExciterState,
+  PitchShiftState, ProtectionMode, CompressorParams, ReverbState, StereoState
 } from './types.js';
 
 export function finiteNumber(value: unknown, fallback: number): number {
@@ -31,15 +31,13 @@ export function defaultAudioState(): AudioState {
       gains: new Array(EQ_BANDS).fill(0),
       qs: new Array(EQ_BANDS).fill(DEFAULT_Q)
     },
-    dynamics: {
-      enabled: false,
-      mode: 'normal',
-      amount: 0.35,
-      response: 0.5,
-      lowCrossoverHz: 180,
-      highCrossoverHz: 4500
-    },
-    stereo: normalizeStereo(null)
+    dynamics: normalizeDynamics(null),
+    stereo: normalizeStereo(null),
+    reverb: normalizeReverb(null),
+    delay: normalizeDelay(null),
+    autoPan: normalizeAutoPan(null),
+    exciter: normalizeExciter(null),
+    pitchShift: normalizePitchShift(null)
   };
 }
 
@@ -61,7 +59,12 @@ function normalizeArray(
 }
 
 export function normalizeEq(value: unknown): EqState {
-  const defaults = defaultAudioState().eq;
+  const defaults = {
+    enabled: true,
+    frequencies: [...DEFAULT_FREQUENCIES],
+    gains: new Array(EQ_BANDS).fill(0),
+    qs: new Array(EQ_BANDS).fill(DEFAULT_Q)
+  } satisfies EqState;
   const src = value && typeof value === 'object' ? value as Record<string, unknown> : {};
   return {
     enabled: src.enabled !== false,
@@ -95,8 +98,59 @@ export function normalizeDynamics(value: unknown): DynamicsState {
   };
 }
 
-export function normalizeStereo(_value: unknown): StereoCompatibilityState {
-  return { enabled: false, width: 1, balance: 0, mono: false, swap: false };
+export function normalizeStereo(value: unknown): StereoState {
+  const src = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  return {
+    enabled: src.enabled === true,
+    width: clamp(finiteNumber(src.width, 1), 0, 2),
+    balance: clamp(finiteNumber(src.balance, 0), -1, 1),
+    mono: src.mono === true,
+    swap: src.swap === true
+  };
+}
+
+export function effectiveStereoWidth(value: unknown): number {
+  const stereo = normalizeStereo(value);
+  return stereo.mono ? 0 : stereo.width;
+}
+
+export function normalizeReverb(value: unknown): ReverbState {
+  const src = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const type = src.type === 'hall' || src.type === 'plate' ? src.type : 'room';
+  return { enabled: src.enabled === true, mix: clamp(finiteNumber(src.mix, 0.22), 0, 1), type };
+}
+
+export function normalizeDelay(value: unknown): DelayState {
+  const src = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  return {
+    enabled: false,
+    timeMs: clamp(finiteNumber(src.timeMs, 280), 20, 2000),
+    feedback: clamp(finiteNumber(src.feedback, 0.28), 0, 0.88),
+    mix: clamp(finiteNumber(src.mix, 0.2), 0, 1)
+  };
+}
+
+export function normalizeAutoPan(value: unknown): AutoPanState {
+  const src = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  return {
+    enabled: src.enabled === true,
+    rateHz: clamp(finiteNumber(src.rateHz, 0.18), 0.03, 4),
+    depth: clamp(finiteNumber(src.depth, 0.45), 0, 1)
+  };
+}
+
+export function normalizeExciter(value: unknown): ExciterState {
+  const src = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  return {
+    enabled: false,
+    amount: clamp(finiteNumber(src.amount, 0.18), 0, 1),
+    frequencyHz: clamp(finiteNumber(src.frequencyHz, 5200), 1200, 16000)
+  };
+}
+
+export function normalizePitchShift(value: unknown): PitchShiftState {
+  const src = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  return { enabled: src.enabled === true, semitones: clamp(finiteNumber(src.semitones, 0), -12, 0) };
 }
 
 export function isLegacyPreset(value: unknown): value is Record<string, unknown> & { frequencies: unknown[]; gains: unknown[] } {
@@ -115,8 +169,7 @@ export function normalizeAudioState(value: unknown): AudioState {
       ...defaults,
       gainDb: clamp(src.gainDb ?? src.gain ?? 0, GAIN_DB_MIN, GAIN_DB_MAX),
       eq: normalizeEq(value),
-      dynamics: normalizeDynamics({ enabled: false }),
-      stereo: normalizeStereo(null)
+      dynamics: normalizeDynamics({ enabled: false })
     };
   }
 
@@ -126,7 +179,12 @@ export function normalizeAudioState(value: unknown): AudioState {
     gainDb: clamp(src.gainDb ?? src.gain ?? 0, GAIN_DB_MIN, GAIN_DB_MAX),
     eq: normalizeEq(eqSource),
     dynamics: normalizeDynamics(src.dynamics),
-    stereo: normalizeStereo(src.stereo)
+    stereo: normalizeStereo(src.stereo),
+    reverb: normalizeReverb(src.reverb),
+    delay: normalizeDelay(src.delay),
+    autoPan: normalizeAutoPan(src.autoPan),
+    exciter: normalizeExciter(src.exciter),
+    pitchShift: normalizePitchShift(src.pitchShift)
   };
 }
 

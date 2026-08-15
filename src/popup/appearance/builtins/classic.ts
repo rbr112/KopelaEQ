@@ -1,0 +1,63 @@
+import { APPEARANCE_SCHEMA_VERSION, type ThemeDefinition } from '../theme-types.js';
+
+export const CLASSIC_THEME: ThemeDefinition = {
+  schemaVersion: APPEARANCE_SCHEMA_VERSION,
+  id: 'builtin.classic',
+  name: 'Classic',
+  author: 'Kopela',
+  preferredLayout: 'classic',
+  builtin: true,
+  tokens: {
+    colors: {
+      background: '#0b0e12',
+      surface: '#11161d',
+      surfaceRaised: '#151b23',
+      surfaceOverlay: '#0e1217',
+      text: '#edf2f7',
+      textMuted: '#8895a4',
+      border: '#27303b',
+      borderSoft: '#1c232c',
+      accent: '#5fc9d8',
+      accentAlt: '#a58af5',
+      positive: '#64d28a',
+      danger: '#e1767d'
+    },
+    radius: { window: 10, panel: 9, control: 8 },
+    typography: { family: 'system', displayFamily: 'system', scale: 1, micro: 9, label: 10, body: 11, title: 13, headline: 15, weightRegular: 400, weightMedium: 560, weightStrong: 680 },
+    spacing: { scale: 1, xs: 4, sm: 8, md: 12, lg: 16 },
+    surface: { opacity: 1, blur: 0, shadowStrength: 0.45, main: { color: '#11161d', opacity: 1 }, eq: { color: '#0e1217', opacity: 1 }, cards: { color: '#151b23', opacity: 1 }, tools: { color: '#11161d', opacity: 1 }, controls: { color: '#151b23', opacity: 1 } },
+    motion: { fast: 120, normal: 180 },
+    artwork: { enabled: false, assetId: '', placement: 'none', opacity: 0, dim: 1, blur: 0, positionX: 50, positionY: 50, scale: 1 },
+    eq: {
+      background: '#0c1116',
+      gridMajor: '#27303a',
+      gridMinor: '#1b232b',
+      axis: '#3a4957',
+      label: '#748291',
+      labelStrong: '#a2afbc',
+      curve: '#72d5bd',
+      curveDisabled: '#59636e',
+      fill: 'rgba(114,213,189,.07)',
+      spectrumFill: 'rgba(95,201,216,.065)',
+      spectrumStroke: 'rgba(95,201,216,.34)',
+      spectrumLabel: '#5f7583',
+      bandGuide: 'rgba(165,138,245,.58)',
+      totalGuide: 'rgba(195,210,222,.42)',
+      totalPoint: '#d8e2ec',
+      totalPointStroke: '#0b0f14',
+      point: '#72d5bd',
+      pointHover: '#9de1ea',
+      pointSelected: '#a58af5',
+      pointStroke: '#0b0f14',
+      selectedRing: 'rgba(225,238,247,.82)',
+      pointStyle: 'mono',
+      pointShape: 'solid',
+      viewGain: 30,
+      gridStyle: 'legacy',
+      showSpectrumScale: true,
+      curveWidth: 1.7,
+      pointRadius: 5.2,
+      bandColors: ['#72d5bd']
+    }
+  }
+};

@@ -9,7 +9,8 @@ assert.equal(parseBackgroundMessage({type:MessageType.MeterGet,tabId:7,spectrum:
 assert.equal(parseBackgroundMessage({type:MessageType.MeterGet,tabId:7,spectrumMode:'warp'}),null);
 assert.equal(parseBackgroundMessage({type:MessageType.MeterGet,tabId:7,spectrum:'yes'}),null);
 assert.equal(parseBackgroundMessage({type:MessageType.MeterGet,tabId:7,levels:'yes'}),null);
-assert.equal(parseOffscreenMessage({target:'offscreen',type:MessageType.CaptureStart,tabId:1,streamId:'x',state:{},protection:'off'}).streamId,'x');
+assert.equal(parseOffscreenMessage({target:'offscreen',type:MessageType.CaptureStart,tabId:1,streamId:'x',state:{},protection:'off',stateRevision:1,protectionRevision:1}).streamId,'x');
+assert.equal(parseOffscreenMessage({target:'offscreen',type:MessageType.CaptureStart,tabId:1,streamId:'x',state:{},protection:'off'}),null,'CaptureStart must never synthesize mutation revisions');
 assert.equal(parseOffscreenMessage({target:'offscreen',type:MessageType.CaptureStart,tabId:1,streamId:''}),null);
 assert.equal(parseOffscreenMessage({target:'offscreen',type:MessageType.MeterGet,tabId:1,spectrum:true,spectrumMode:'smooth'}).spectrumMode,'smooth');
 assert.equal(parseOffscreenMessage({target:'offscreen',type:MessageType.MeterGet,tabId:1,spectrumMode:'warp'}),null);

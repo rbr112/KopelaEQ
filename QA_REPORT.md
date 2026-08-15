@@ -1,193 +1,91 @@
-# KopelaEQ 1.22.0 — Final QA report
+# KopelaEQ 1.28.8 — QA report
 
-Date: 2026-08-08
-Maintainer: **Kopela**
+1.28.8 is an icon-only refinement over 1.28.7. Frozen EQ response, accepted Pitch Down output, preset signal data, Protection tuning, permissions, serialized state schema, and async/MV3 lifecycle behavior remain unchanged.
 
-## Result
+## Automated / reproducible results
 
-**Automated release audit: PASS.**
+- TypeScript 5.8.3 strict typecheck: PASS
+- Browser-native ESM build: PASS
+- StateSet adversarial burst: PASS; 24 rapid intents collapse to 2 storage + 2 runtime writes and finish on the newest state
+- Protection adversarial burst: PASS; delayed Light followed by newer modes finishes with storage/runtime on Strong
+- Slow background startup authority + stale-response generation tests: PASS
+- Offscreen stale Worklet completion generation test: PASS
+- Rice/Nocturne appearance latest-wins race test: PASS
+- Artwork/background crash-recovery journal + custom-theme deletion ordering test: PASS
+- Cross-tab shared offscreen lifecycle Start/Stop race: PASS
+- Typed Pitch Worklet wrapper integration: PASS
+- Node regression suites: 33/33 PASS
+- Allocation-free Pitch latency helper: PASS; popup imports `pitch-latency.js`, not the realtime Pitch core
+- Meter single-flight regression under overlapping ticks: PASS
+- Partial realtime control synchronization / EQ-only redraw contract: implementation/static + UI gate
+- Typed popup markup contract (`PopupElements`): PASS in real UI QA startup
+- TypeScript unused-local/parameter checks are part of normal `typecheck`: PASS
+- Generic `popup.css` exact duplicate selectors: 0; historical Band Inspector override stack removed
+- EQ response scratch-buffer/cache refactor: UI/native response probe PASS
+- 400 ms Appearance storage timeout preserves stored custom-theme selection: PASS
+- Degraded surface startup re-reads authoritative overrides before whole-map write: PASS
+- 400 ms preset timeout performs zero fallback writes; later Save preserves existing user presets: PASS
+- Lazy custom-theme library on built-in startup: PASS
+- Media upload/theme-switch race regression: PASS
+- IndexedDB transaction-completion contract: PASS
+- Uploaded image dimension limit (4096×4096 / 16 MP): PASS
+- Animated GIF frame limit (400): PASS
+- GIF live-preview blur cap: implementation/static gate
+- Transient offscreen reconciliation IPC does not recapture a healthy session: PASS
+- Custom parent-theme replacement revalidates descendants and rolls back on failure: PASS
+- IndexedDB `versionchange` connection close: implementation/static gate
+- Popup UI/interaction assertions: PASS through isolated Playwright process-group runner
+- Static release/code checks: PASS
+- Golden EQ response, 44.1/48 kHz: PASS, 0 dB max difference
+- Meter side-chain audible-path delta: PASS, 0 sample delta
+- Disabled new-stage dry paths: PASS, 0 sample delta
+- DSP crossover math: PASS
+- Stereo math: PASS
+- Pitch performance: p95/p99 + callback-deadline miss-rate gate
+- Pitch browser capability probe: expected SKIP in supplied headless Chromium when `audioWorklet.addModule` is unavailable
+- Deterministic release/source archive verification: PASS after release build
 
-**Automated release engineering is signed off.** The maintainer also accepted the RC in a real-use smoke test. The following device/environment checks still cannot be truthfully certified by this container:
 
-1. real-device listening A/B on the maintainer's audio hardware;
-2. 30–60 minute Chrome Task Manager CPU/RAM soak with real captured media;
-3. clean-machine dependency installation from the public npm registry (this environment's internal npm mirror returns 404 for TypeScript).
+## Performance / maintainability invariants
 
-The generated ZIP is the frozen 1.22.0 release artifact. The remaining items are publication/environment checks rather than known code blockers.
+- Popup latency text is calculated without constructing `LegacyDownPitchShifter` or allocating audio buffers.
+- `AudioSession` does not import Pitch core only for latency; the full realtime processor stays on the actual Pitch path.
+- Meter polling cannot overlap; a stale response is ignored after tab/capture generation changes.
+- Realtime UI synchronization is grouped by control domain; EQ drag does not rewrite unrelated Audio Tools/workspace controls.
+- EQ drawing reuses response/frequency scratch buffers and structured caches rather than JSON-string cache keys and per-sample point objects.
+- Static popup DOM is collected through typed tag contracts.
+- `AppearanceService` pure surface resolution/export logic is isolated in `appearance-surface.ts`.
+- Confirmed stale QA/build wrappers were removed, and the normal compiler rejects unused locals/parameters.
+- Generic popup CSS has one authoritative Band Inspector block and no exact duplicate selectors.
 
-## Baseline / audio compatibility
+## Data-integrity invariants
 
-1.22 intentionally preserves 1.21.1 DSP tuning.
+- Bounded reads return `ok / timeout / error`; timeout/error never masquerade as `{}`.
+- Fallback Appearance and bundled presets may be shown temporarily but are not authoritative and cannot trigger repair/migration writes.
+- Preset mutations require an authoritative retry first.
+- Custom themes, surface overrides, and media hints require authoritative storage before whole-map persistence.
+- Artwork/background mutations are journaled before cross-store changes; restart either commits the matching Blob/hint pair or restores the previous hint.
+- Custom-theme removal commits the authoritative registry before destructive Blob cleanup; a failed registry write leaves media intact.
 
-The following source files are byte-identical to 1.21.1:
+## Startup / lifecycle invariants
 
-- `src/audio/audio-session.ts`
-- `src/audio/bypass-gate.ts`
-- `src/audio/eq-response.ts`
-- `src/shared/constants.ts`
-- `src/shared/state.ts`
-- `src/shared/default-presets.ts`
-- `src/shared/presets.ts`
+- Built-in Rice/Nocturne startup keeps the custom-theme library lazy.
+- IndexedDB media refresh stays off the critical first-paint path and is skipped when authoritative hints prove no Blob is needed.
+- Important service-worker Chrome API/offscreen IPC operations are time-bounded.
+- AudioState/Protection persistence is background-owned, versioned, single-flight/latest-wins.
+- Offscreen state/protection application is revision-guarded across asynchronous waits.
+- Shared offscreen create/close operations are serialized and veto close while any `desiredTabs` start intent exists.
+- Capture reconciliation retries transient offscreen IPC and skips destructive recovery when either offscreen or browser capture state is uncertain.
+- Playwright UI QA runs in a separate OS process group; descendants are terminated before later browser gates.
 
-Browser-native golden response tests passed at **44.1 kHz and 48 kHz with maximum error 0 dB**.
+## Manual Chrome Stable gates
 
-Meter side-chain transparency test passed with **maximum audible-path sample delta 0** over 4096 frames.
+Before public Store release:
 
-3-band crossover math test passed with **0.0171 dB maximum ripple**.
-
-## Code audit findings fixed in 1.22
-
-### Chrome API typing
-
-Previous builds declared the whole `chrome` namespace as `any`, which weakened the value of strict TypeScript at the browser boundary.
-
-1.22 defines only the Chrome API subset used by KopelaEQ: runtime messaging, storage, tabs, tabCapture, and offscreen. Background code no longer uses `sender: any` or tabCapture callback `any`.
-
-### Runtime message validation
-
-Runtime messages still enter as `unknown`, then pass through typed parsers before exhaustive switches.
-
-Additional rejected cases now include:
-
-- non-boolean `STATE_SET.persist`;
-- `CAPTURE_START` missing state/protection data;
-- offscreen `STATE_SET` missing `state`;
-- offscreen `PROTECTION_SET` missing `protection`.
-
-Regression tests cover all of these cases.
-
-### Unreachable handler code
-
-A duplicated unreachable `return assertNever(message)` was found in the offscreen switch and removed.
-
-## Capture lifecycle
-
-Automated tests cover:
-
-- invalid tab ids;
-- first Start;
-- duplicate Start while active without requesting another stream id;
-- State/Protection propagation;
-- Stop;
-- pending stream-id Start followed by Stop;
-- rapid Start -> Stop -> Start;
-- active-stream browser race and retry;
-- service-worker restart reconciliation;
-- **100 sequential Start/Stop cycles**;
-- two simultaneously active tab sessions followed by clean disposal.
-
-The user-facing raw Chrome error `Cannot capture a tab with an active stream` is not emitted by the popup path.
-
-## Security / privacy audit
-
-Release permissions are exactly:
-
-- `activeTab`
-- `tabCapture`
-- `offscreen`
-- `storage`
-
-There are:
-
-- no host permissions;
-- no `scripting` permission;
-- no content scripts;
-- no web-page injection;
-- no remote JavaScript/WebAssembly;
-- no `eval` / `new Function`;
-- no developer-controlled `fetch`, XMLHttpRequest, WebSocket, or HTTP(S) endpoint in emitted extension JavaScript.
-
-Popup CSP remains:
-
-`script-src 'self'; object-src 'self'`
-
-The popup now visibly states **Audio stays on this device**. The privacy policy states that selected-tab audio is processed locally and is not intentionally recorded or uploaded.
-
-## Chrome Web Store policy review
-
-Reviewed against current official Chrome extension / Chrome Web Store documentation on 2026-08-08.
-
-Findings:
-
-- The extension has a narrow single purpose: user-invoked current-tab audio processing.
-- `tabCapture` is required for the feature.
-- `activeTab` is justified because `getMediaStreamId({targetTabId})` can target only tabs for which activeTab access has been granted.
-- Chrome 116 minimum is technically justified by the service-worker stream-id flow to an offscreen document and the capture APIs used by this implementation.
-- `offscreen` is used only for the persistent Web Audio document context.
-- Local-only processing still needs accurate privacy disclosure; `PRIVACY.md` and `STORE_LISTING.md` are prepared accordingly.
-- Before Store upload, the maintainer must host the privacy policy on a public HTTPS page and ensure dashboard privacy answers match actual behavior.
-
-## Build / release pipeline
-
-### Compiler
-
-The official 1.22 build path is TypeScript **5.8.3** emitting browser-native ESM.
-
-The build script fails if `tsc --version` is not exactly `Version 5.8.3`.
-
-The earlier esbuild path was removed as the official path because KopelaEQ does not bundle/minify, and maintaining two transpilers created an unverified release branch without changing the extension's module architecture.
-
-### Deterministic packaging
-
-Release ZIP generation now normalizes:
-
-- sorted entry order;
-- fixed ZIP timestamps (`2020-01-01 00:00:00`);
-- normalized file mode metadata;
-- compression settings.
-
-`verify_release.py` additionally checks:
-
-- no duplicate entries;
-- correct manifest/version/permissions;
-- no source/tests/scripts in the Store ZIP;
-- no dynamic/remote-code patterns in packed JS;
-- deterministic archive metadata;
-- SHA-256 values match `SHA256SUMS.txt`.
-
-A final double-build hash comparison is performed before release-candidate handoff.
-
-### Dependency-install limitation of this environment
-
-The container has TypeScript 5.8.3 installed and the complete build/typecheck passed with it. However, its configured internal npm registry returns HTTP 404 for `typescript@5.8.3`, so a fresh `npm install`/lockfile generation cannot be validated here. This is an environment limitation, not a runtime dependency of the extension. The source `package.json` pins TypeScript exactly to `5.8.3`.
-
-## Automated suite
-
-PASS:
-
-- TypeScript strict typecheck
-- production build
-- syntax check for all emitted JS modules
-- shared state tests
-- exact bundled preset fixture
-- runtime message contract/parser tests
-- BypassGate transitions
-- AudioSession
-- offscreen runtime
-- CaptureManager lifecycle
-- background runtime
-- MV3/static/security audit
-- 3-band crossover math
-- golden browser-native EQ response at 44.1/48 kHz
-- analyser side-chain output transparency
-- Chromium popup UI QA
-
-Chromium popup QA result:
-
-- CSS viewport: **744 x 580**, no root overflow
-- native EQ response benchmark: approximately **0.65 ms average / 1.2 ms p95** in the final pre-release QA run (640 frequencies x 11 bands)
-- custom dark preset menu: PASS
-- band editor: PASS
-- preset workflow: PASS
-- Meter / latched clip state / drag: PASS
-
-## Remaining manual / publication checks
-
-- extended device-specific listening/A-B if desired beyond the maintainer smoke test;
-- 30–60 minute real Chrome Task Manager soak;
-- test on restricted pages and real multi-tab media;
-- Windows 100/125/150% display-scale check where available;
-- clean-machine `npm install && npm run release` using the normal public registry;
-- choose a GitHub repository license;
-- host privacy policy and complete Chrome Web Store dashboard fields;
-- confirm developer account 2-Step Verification and support/contact details.
+1. Load `kopelaeq-1.28.8.zip` in current Chrome Stable.
+2. Verify rapid popup reopen/restart/update with existing presets and custom themes.
+3. Upload large-but-allowed PNG/WebP and animated GIF media; verify rejected oversized media reports a clear error.
+4. Test rapid Rice ↔ Nocturne switching during media upload.
+5. Test custom-theme import/replace/remove, including a theme extending another custom theme.
+6. Test Start/Stop capture and browser restart with a live captured tab.
+7. Test Pitch Down on speech/music and run the 30–60 minute CPU/RAM/listening soak.

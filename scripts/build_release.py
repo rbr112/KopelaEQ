@@ -25,15 +25,18 @@ def add_bytes(z: zipfile.ZipFile, arc: str, data: bytes) -> None:
 def add_file(z: zipfile.ZipFile, path: Path, arc: str) -> None:
     add_bytes(z, arc, path.read_bytes())
 
+release_entries = {path.relative_to(EXT).as_posix(): path for path in EXT.rglob('*') if path.is_file()}
+if (ROOT / 'LICENSE').exists():
+    release_entries['LICENSE'] = ROOT / 'LICENSE'
 with zipfile.ZipFile(release_out, 'w') as z:
-    for path in sorted(p for p in EXT.rglob('*') if p.is_file()):
-        add_file(z, path, path.relative_to(EXT).as_posix())
+    for arc in sorted(release_entries):
+        add_file(z, release_entries[arc], arc)
 
 source_roots = [ROOT / 'src', ROOT / 'static', ROOT / 'tests', ROOT / 'scripts']
 source_files = [
-    ROOT / 'package.json', ROOT / 'tsconfig.json', ROOT / 'README.md', ROOT / 'LICENSE', ROOT / 'ARCHITECTURE.md', ROOT / 'PRIVACY.md',
+    ROOT / 'package.json', ROOT / 'tsconfig.json', ROOT / 'README.md', ROOT / 'ARCHITECTURE.md', ROOT / 'PRIVACY.md',
     ROOT / f'RELEASE_NOTES_{version}.md', ROOT / 'RELEASE_CHECKLIST.md', ROOT / 'QA_REPORT.md', ROOT / 'STORE_LISTING.md',
-    ROOT / 'qa' / 'run_ui_qa.py', ROOT / 'baseline' / 'README.md', ROOT / 'SECURITY.md', ROOT / 'CONTRIBUTING.md', ROOT / 'CHANGELOG.md', ROOT / 'GITHUB_RELEASE.md', ROOT / '.gitignore', ROOT / '.gitattributes'
+    ROOT / 'qa' / 'run_ui_qa.py', ROOT / 'baseline' / 'README.md', ROOT / 'SECURITY.md', ROOT / 'CONTRIBUTING.md', ROOT / 'CHANGELOG.md', ROOT / 'GITHUB_RELEASE.md', ROOT / 'LICENSE', ROOT / '.gitignore'
 ]
 source_entries: dict[str, Path] = {}
 for base in source_roots:

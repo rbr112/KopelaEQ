@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import * as S from '../extension/js/shared/index.js';
 
+const EXPECTED_ACTIVE_STREAM_ERRORS = Object.freeze([
+  'Cannot capture a tab with an active stream.',
+  'An active stream is already capturing this tab.',
+  'Cannot capture this tab because it is already being captured.'
+]);
+
 let offscreenOpen=false, streamIdCalls=0, failActiveOnce=false, deferStreamId=false, deferredResolve=null;
 const tabAudible=new Map();
 const captured=new Map();
@@ -34,8 +40,8 @@ const chromeMock={
     async getCapturedTabs(){return [...captured.entries()].map(([tabId,status])=>({tabId,status}));},
     async getMediaStreamId({targetTabId}){
       const tab=Number(targetTabId); streamIdCalls++;
-      if(failActiveOnce){failActiveOnce=false; throw new Error('Cannot capture a tab with an active stream.');}
-      if(captured.has(tab))throw new Error('Cannot capture a tab with an active stream.');
+      if(failActiveOnce){failActiveOnce=false; throw new Error(EXPECTED_ACTIVE_STREAM_ERRORS[0]);}
+      if(captured.has(tab))throw new Error(EXPECTED_ACTIVE_STREAM_ERRORS[0]);
       if(!deferStreamId){captured.set(tab,'pending'); return `stream-${tab}`;}
       return new Promise(resolve=>{deferredResolve=()=>{captured.set(tab,'pending');resolve(`stream-${tab}`);};});
     }
@@ -80,6 +86,17 @@ await Promise.all([manager2.stopCapture(901),manager2.stopCapture(902)]);
 assert.equal(captured.has(901),false); assert.equal(captured.has(902),false);
 assert.equal(sessions.size,0);
 
+// Cross-tab lifecycle race: stopping A must not close the shared offscreen
+// document while B has already declared intent to start.
+await manager2.startCapture(70);
+const stopA=manager2.stopCapture(70);
+const startB=manager2.startCapture(71);
+const [,startedB]=await Promise.all([stopA,startB]);
+assert.equal(startedB.active,true);
+assert.equal(offscreenOpen,true,'offscreen must remain open for a concurrently starting tab');
+assert.equal(sessions.has(71),true);
+await manager2.stopCapture(71);
+
 
 // Media transitions: a muted capture is not automatically treated as broken.
 await manager2.startCapture(50);
@@ -115,4 +132,24 @@ await new Promise(r=>setTimeout(r,500));
 assert.ok(streamIdCalls>baselineCalls,'ended track should trigger controlled recovery');
 await manager2.stopCapture(51);
 
+
+// Restart reconciliation must not tear down a healthy browser capture because
+// the first offscreen status probes fail transiently.
+await manager2.startCapture(61);
+baselineCalls=streamIdCalls;
+const originalSendMessage=chromeMock.runtime.sendMessage.bind(chromeMock.runtime);
+let transientStatusFailures=2;
+chromeMock.runtime.sendMessage=async (msg)=>{
+  if(msg.type===S.MessageType.SessionStatus && transientStatusFailures>0){ transientStatusFailures--; throw new Error('transient IPC'); }
+  return originalSendMessage(msg);
+};
+const manager3=new CaptureManager({getAudioState:()=>state,getProtection:()=>protection});
+await manager3.reconcileExistingCaptures();
+await new Promise(r=>setTimeout(r,250));
+assert.equal(streamIdCalls,baselineCalls,'transient reconciliation IPC must not recapture a healthy session');
+assert.equal(manager3.phaseFor(61),'active');
+chromeMock.runtime.sendMessage=originalSendMessage;
+await manager3.stopCapture(61);
+
+for (const text of EXPECTED_ACTIVE_STREAM_ERRORS) assert.match(text, /active stream|already.*captur|cannot capture/i);
 console.log('capture_manager.test.mjs: PASS');

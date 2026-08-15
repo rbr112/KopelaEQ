@@ -37,3 +37,12 @@ KopelaEQ makes no developer-controlled network requests. Audio and settings are 
 ## Chrome Web Store Limited Use
 
 KopelaEQ's use of information obtained through Chrome APIs is limited to providing its user-facing tab-audio processing functionality. The use of information received from Google APIs will adhere to the Chrome Web Store User Data Policy, including the Limited Use requirements.
+
+## Custom themes
+
+Imported theme JSON is validated and stored locally in Chrome storage. KopelaEQ does not upload custom themes to the developer or fetch remote code/assets from theme files.
+
+
+## Local artwork and background files
+
+If you choose an image or animated GIF for the artwork card or the full theme background, KopelaEQ stores that file locally in the extension's IndexedDB database. Card artwork and background files are keyed separately to the selected theme, are not synchronized through Chrome storage, and can be removed from Appearance at any time. Supported files are PNG, JPEG, WebP, and GIF up to 12 MB per file.

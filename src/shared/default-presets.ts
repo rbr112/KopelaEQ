@@ -1,5 +1,3 @@
-import type { PresetMap } from './types.js';
-
 export const DEFAULT_PRESETS = {
   "Vivid (111)": {
     "frequencies": [
@@ -208,4 +206,3 @@ export const DEFAULT_PRESETS = {
   }
 } as const;
 
-export type BundledPresetName = keyof typeof DEFAULT_PRESETS;

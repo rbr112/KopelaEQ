@@ -2,6 +2,7 @@ export type EqFilterType = 'lowshelf' | 'peaking' | 'highshelf';
 export type DynamicsMode = 'normal' | 'multiband';
 export type ProtectionMode = 'strong' | 'medium' | 'light' | 'off';
 export type SpectrumMode = 'fast' | 'balanced' | 'smooth';
+export type ReverbType = 'room' | 'hall' | 'plate';
 
 export interface EqState {
   enabled: boolean;
@@ -19,13 +20,44 @@ export interface DynamicsState {
   highCrossoverHz: number;
 }
 
-/** Retained only for storage/import compatibility. No Stereo DSP exists. */
-export interface StereoCompatibilityState {
-  enabled: false;
-  width: 1;
-  balance: 0;
-  mono: false;
-  swap: false;
+export interface StereoState {
+  enabled: boolean;
+  /** Mid/Side width multiplier: 0 = mono, 1 = unchanged, 2 = 200%. */
+  width: number;
+  /** Balance normalized to -1..+1. */
+  balance: number;
+  mono: boolean;
+  swap: boolean;
+}
+
+export interface ReverbState {
+  enabled: boolean;
+  mix: number;
+  type: ReverbType;
+}
+
+export interface DelayState {
+  enabled: boolean;
+  timeMs: number;
+  feedback: number;
+  mix: number;
+}
+
+export interface AutoPanState {
+  enabled: boolean;
+  rateHz: number;
+  depth: number;
+}
+
+export interface ExciterState {
+  enabled: boolean;
+  amount: number;
+  frequencyHz: number;
+}
+
+export interface PitchShiftState {
+  enabled: boolean;
+  semitones: number;
 }
 
 export interface AudioState {
@@ -33,7 +65,12 @@ export interface AudioState {
   gainDb: number;
   eq: EqState;
   dynamics: DynamicsState;
-  stereo: StereoCompatibilityState;
+  stereo: StereoState;
+  reverb: ReverbState;
+  delay: DelayState;
+  autoPan: AutoPanState;
+  exciter: ExciterState;
+  pitchShift: PitchShiftState;
 }
 
 export interface Preset {
@@ -63,11 +100,11 @@ export interface StereoMeterSnapshot {
 
 export interface MeterSnapshot {
   sampleRate: number;
-  /** Level immediately before the final Protection stage (after Dynamics). */
+  /** Level immediately before the final Protection stage (after Stereo/Dynamics). */
   preProtection: StereoMeterSnapshot;
-  /** Final output level after Protection. */
+  /** Level immediately after Protection, before decorative post-effects. */
   postProtection: StereoMeterSnapshot;
-  /** Compatibility aliases for the final/post-Protection meter. */
+  /** Compatibility aliases for the post-Protection meter. */
   peakDb: number;
   rmsDb: number;
   gainReductionDb: number;

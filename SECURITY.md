@@ -13,3 +13,7 @@ Useful reports should include:
 - relevant console errors with sensitive page/audio content removed.
 
 Do not attach captured personal audio to a public report.
+
+## Imported theme files
+
+Custom theme JSON is treated as untrusted input and passes through `theme-validator.ts` before registration. Theme ids, colors, numeric ranges, typography presets, artwork ids, and EQ tokens are allow-listed; built-in ids are reserved. Theme files cannot inject CSS, JavaScript, remote URLs, or WebAssembly.

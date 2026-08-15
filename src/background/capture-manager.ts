@@ -1,12 +1,18 @@
 import { MessageType, normalizeAudioState, normalizeProtection } from '../shared/index.js';
 import type { AudioState, ProtectionMode, SpectrumMode } from '../shared/types.js';
 import type { SessionStatusResponse, StatusResponse } from '../shared/messages.js';
+import { withTimeout } from '../shared/bounded.js';
+import { LatestWinsWriter } from '../shared/latest-wins.js';
 
 export type CapturePhase = 'idle' | 'starting' | 'active' | 'stopping' | 'recovering';
 
 export interface CaptureManagerStateProvider {
   getAudioState(): AudioState;
   getProtection(): ProtectionMode;
+  getStateRevision?(): number;
+  getProtectionRevision?(): number;
+  isStateAuthoritative?(): boolean;
+  isProtectionAuthoritative?(): boolean;
 }
 
 interface CapturedTabInfo {
@@ -16,6 +22,8 @@ interface CapturedTabInfo {
 
 const AUDIBLE_MUTE_GRACE_MS = 700;
 const RECOVERY_COOLDOWN_MS = 1800;
+const CHROME_API_TIMEOUT_MS = 900;
+const RECONCILE_PROBE_ATTEMPTS = 3;
 
 function validTabId(value: unknown): number | null {
   if (value === null || value === undefined || value === '') return null;
@@ -41,11 +49,28 @@ export class CaptureManager {
   private readonly healthProbeGeneration = new Map<number, number>();
   private readonly recoveryInFlight = new Map<number, Promise<void>>();
   private readonly recoveryCooldownUntil = new Map<number, number>();
+  private readonly stateWriters = new Map<number, LatestWinsWriter<AudioState>>();
+  private readonly stateWriterActive = new Map<number, boolean>();
+  private readonly protectionWriter: LatestWinsWriter<ProtectionMode>;
   private offscreenCreating: Promise<void> | null = null;
+  private offscreenLifecycle: Promise<void> = Promise.resolve();
 
-  constructor(private readonly stateProvider: CaptureManagerStateProvider) {}
+  constructor(private readonly stateProvider: CaptureManagerStateProvider) {
+    this.protectionWriter = new LatestWinsWriter<ProtectionMode>(async ({ value, revision }) => {
+      if (!(await this.hasOffscreenDocument())) return;
+      await withTimeout(
+        chrome.runtime.sendMessage({ target: 'offscreen', type: MessageType.ProtectionSet, protection: value, revision }),
+        CHROME_API_TIMEOUT_MS,
+        'Offscreen protection update'
+      );
+    });
+  }
 
   phaseFor(tabId: number): CapturePhase { return this.tabPhases.get(tabId) || 'idle'; }
+  private currentStateRevision(): number { return this.stateProvider.getStateRevision?.() ?? 0; }
+  private currentProtectionRevision(): number { return this.stateProvider.getProtectionRevision?.() ?? 0; }
+  private stateIsAuthoritative(): boolean { return this.stateProvider.isStateAuthoritative?.() ?? true; }
+  private protectionIsAuthoritative(): boolean { return this.stateProvider.isProtectionAuthoritative?.() ?? true; }
 
   private setPhase(tabId: number, phase: CapturePhase): void {
     if (phase === 'idle') this.tabPhases.delete(tabId);
@@ -72,56 +97,93 @@ export class CaptureManager {
     return run;
   }
 
+  private enqueueOffscreenLifecycle<T>(operation: () => Promise<T>): Promise<T> {
+    let resolveValue!: (value: T | PromiseLike<T>) => void;
+    let rejectValue!: (reason?: unknown) => void;
+    const result = new Promise<T>((resolve, reject) => { resolveValue = resolve; rejectValue = reject; });
+    const run = async () => {
+      try { resolveValue(await operation()); }
+      catch (error) { rejectValue(error); }
+    };
+    this.offscreenLifecycle = this.offscreenLifecycle.then(run, run).then(() => undefined, () => undefined);
+    return result;
+  }
+
+  private stateWriterFor(tabId: number): LatestWinsWriter<AudioState> {
+    let writer = this.stateWriters.get(tabId);
+    if (writer) return writer;
+    writer = new LatestWinsWriter<AudioState>(async ({ value, revision }) => {
+      if (!(await this.hasOffscreenDocument())) {
+        this.stateWriterActive.set(tabId, false);
+        return;
+      }
+      const result = responseRecord(await withTimeout(
+        chrome.runtime.sendMessage({ target: 'offscreen', type: MessageType.StateSet, state: value, tabId, revision }),
+        CHROME_API_TIMEOUT_MS,
+        'Offscreen state update'
+      ));
+      const active = Boolean(result.active);
+      this.stateWriterActive.set(tabId, active);
+      if (active) this.setPhase(tabId, 'active');
+    });
+    this.stateWriters.set(tabId, writer);
+    return writer;
+  }
+
   async hasOffscreenDocument(): Promise<boolean> {
-    if (chrome.offscreen && typeof chrome.offscreen.hasDocument === 'function') return chrome.offscreen.hasDocument();
+    if (chrome.offscreen && typeof chrome.offscreen.hasDocument === 'function') {
+      return withTimeout(chrome.offscreen.hasDocument(), CHROME_API_TIMEOUT_MS, 'Offscreen document probe');
+    }
     if (chrome.runtime && typeof chrome.runtime.getContexts === 'function') {
-      const contexts = await chrome.runtime.getContexts({
+      const contexts = await withTimeout(chrome.runtime.getContexts({
         contextTypes: ['OFFSCREEN_DOCUMENT'],
         documentUrls: [chrome.runtime.getURL(this.offscreenUrl)]
-      });
+      }), CHROME_API_TIMEOUT_MS, 'Runtime context probe');
       return contexts.length > 0;
     }
     return false;
   }
 
-  private async ensureOffscreenDocument(): Promise<void> {
-    if (await this.hasOffscreenDocument()) return;
-    if (this.offscreenCreating) return this.offscreenCreating;
-    const creating: Promise<void> = chrome.offscreen.createDocument({
-      url: this.offscreenUrl,
-      reasons: ['USER_MEDIA'],
-      justification: 'Process the user-selected tab audio with Web Audio while the MV3 service worker is not a persistent document.'
-    }).finally(() => { this.offscreenCreating = null; });
-    this.offscreenCreating = creating;
-    return creating;
+  private ensureOffscreenDocument(): Promise<void> {
+    return this.enqueueOffscreenLifecycle(async () => {
+      if (await this.hasOffscreenDocument()) return;
+      if (this.offscreenCreating) return this.offscreenCreating;
+      const creating = withTimeout(chrome.offscreen.createDocument({
+        url: this.offscreenUrl,
+        reasons: ['USER_MEDIA'],
+        justification: 'Process the user-selected tab audio with Web Audio while the MV3 service worker is not a persistent document.'
+      }), CHROME_API_TIMEOUT_MS, 'Offscreen document creation').finally(() => { this.offscreenCreating = null; });
+      this.offscreenCreating = creating;
+      return creating;
+    });
   }
 
   async queryOffscreenStatus(tabId: number | null = null): Promise<SessionStatusResponse | null> {
-    if (!(await this.hasOffscreenDocument())) {
-      return {
-        ok: true,
-        active: false,
-        activeTabs: [],
-        pendingTabs: [],
-        state: null,
-        protection: this.stateProvider.getProtection(),
-        trackReadyState: null,
-        trackMuted: null,
-        trackEnabled: null,
-        contextState: null
-      };
-    }
     try {
+      if (!(await this.hasOffscreenDocument())) {
+        return {
+          ok: true,
+          active: false,
+          activeTabs: [],
+          pendingTabs: [],
+          state: null,
+          protection: this.stateProvider.getProtection(),
+          trackReadyState: null,
+          trackMuted: null,
+          trackEnabled: null,
+          contextState: null
+        };
+      }
       const payload: Record<string, unknown> = { target: 'offscreen', type: MessageType.SessionStatus };
       const id = validTabId(tabId);
       if (id !== null) payload.tabId = id;
-      const result = await chrome.runtime.sendMessage(payload) as SessionStatusResponse;
+      const result = await withTimeout(chrome.runtime.sendMessage(payload) as Promise<SessionStatusResponse>, CHROME_API_TIMEOUT_MS, 'Offscreen status');
       if (!result || result.ok !== true) return null;
       const activeTabs = Array.isArray(result.activeTabs) ? result.activeTabs : [];
       const protection = this.stateProvider.getProtection();
       if (activeTabs.length && normalizeProtection(result.protection) !== protection) {
         try {
-          await chrome.runtime.sendMessage({ target: 'offscreen', type: MessageType.ProtectionSet, protection });
+          await withTimeout(chrome.runtime.sendMessage({ target: 'offscreen', type: MessageType.ProtectionSet, protection, revision: this.currentProtectionRevision() }), CHROME_API_TIMEOUT_MS, 'Protection sync');
           result.protection = protection;
         } catch { /* later reconciliation can retry */ }
       }
@@ -129,6 +191,15 @@ export class CaptureManager {
     } catch {
       return null;
     }
+  }
+
+  private async queryOffscreenStatusConfirmed(tabId: number | null = null): Promise<SessionStatusResponse | null> {
+    for (let attempt = 0; attempt < RECONCILE_PROBE_ATTEMPTS; attempt += 1) {
+      const status = await this.queryOffscreenStatus(tabId);
+      if (status) return status;
+      if (attempt + 1 < RECONCILE_PROBE_ATTEMPTS) await delay(90);
+    }
+    return null;
   }
 
   private remoteSessionHealthy(remote: SessionStatusResponse | null): boolean {
@@ -139,14 +210,18 @@ export class CaptureManager {
     return true;
   }
 
-  private async capturedTabs(): Promise<CapturedTabInfo[]> {
+  private async capturedTabsReliable(): Promise<CapturedTabInfo[] | null> {
     if (!chrome.tabCapture || typeof chrome.tabCapture.getCapturedTabs !== 'function') return [];
     try {
-      const result = await chrome.tabCapture.getCapturedTabs();
+      const result = await withTimeout(chrome.tabCapture.getCapturedTabs(), CHROME_API_TIMEOUT_MS, 'Captured tab probe');
       return Array.isArray(result) ? result as CapturedTabInfo[] : [];
     } catch {
-      return [];
+      return null;
     }
+  }
+
+  private async capturedTabs(): Promise<CapturedTabInfo[]> {
+    return (await this.capturedTabsReliable()) || [];
   }
 
   private async capturedInfo(tabId: number): Promise<CapturedTabInfo | null> {
@@ -157,7 +232,7 @@ export class CaptureManager {
   private async tabAudible(tabId: number): Promise<boolean | null> {
     if (!chrome.tabs || typeof chrome.tabs.get !== 'function') return null;
     try {
-      const tab = await chrome.tabs.get(tabId);
+      const tab = await withTimeout(chrome.tabs.get(tabId), CHROME_API_TIMEOUT_MS, 'Tab audible probe');
       return typeof tab?.audible === 'boolean' ? tab.audible : null;
     } catch {
       return null;
@@ -188,18 +263,24 @@ export class CaptureManager {
   }
 
   async maybeCloseOffscreen(): Promise<void> {
-    if (this.offscreenCreating || !(await this.hasOffscreenDocument())) return;
-    const remote = await this.queryOffscreenStatus();
-    if (!remote) return;
-    if ((remote.activeTabs?.length || 0) || (remote.pendingTabs?.length || 0)) return;
-    const captures = await this.capturedTabs();
-    if (captures.some((item) => item && item.status !== 'stopped' && item.status !== 'error')) return;
-    try { await chrome.offscreen.closeDocument(); } catch { /* already closing */ }
+    await this.enqueueOffscreenLifecycle(async () => {
+      // desiredTabs is updated synchronously before per-tab queues run. A start on
+      // another tab therefore vetoes a close even while this lifecycle task waits.
+      if (this.desiredTabs.size || this.offscreenCreating || !(await this.hasOffscreenDocument())) return;
+      const remote = await this.queryOffscreenStatus();
+      if (!remote || this.desiredTabs.size) return;
+      if ((remote.activeTabs?.length || 0) || (remote.pendingTabs?.length || 0)) return;
+      const captures = await this.capturedTabs();
+      if (this.desiredTabs.size) return;
+      if (captures.some((item) => item && item.status !== 'stopped' && item.status !== 'error')) return;
+      try { await withTimeout(chrome.offscreen.closeDocument(), CHROME_API_TIMEOUT_MS, 'Offscreen document close'); } catch { /* already closing/timed out */ }
+    });
   }
 
+  // CHROME-ERROR-TEXT-DEPENDENCY: см. заметку в RELEASE_CHECKLIST.md — сверять при апдейте minimum_chrome_version.
   private async getStreamIdSafely(tabId: number): Promise<{ streamId?: string; alreadyActive?: true; state?: AudioState | null }> {
     try {
-      return { streamId: await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }) };
+      return { streamId: await withTimeout(chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }), CHROME_API_TIMEOUT_MS, 'Tab capture stream id') };
     } catch (error: unknown) {
       const text = error instanceof Error ? error.message : String(error || '');
       if (!/active stream|already.*captur|cannot capture/i.test(text)) throw error;
@@ -208,7 +289,7 @@ export class CaptureManager {
       if (this.remoteSessionHealthy(remote)) return { alreadyActive: true, state: remote?.state };
 
       if (await this.waitForCaptureRelease(tabId, 3000)) {
-        return { streamId: await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }) };
+        return { streamId: await withTimeout(chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }), CHROME_API_TIMEOUT_MS, 'Tab capture stream id') };
       }
       const friendly = new Error('Previous audio session is still stopping. Try again in a moment.') as Error & { code?: string };
       friendly.code = 'STREAM_BUSY';
@@ -218,7 +299,7 @@ export class CaptureManager {
 
   private async stopRemoteSessionForRestart(tabId: number): Promise<void> {
     if (!(await this.hasOffscreenDocument())) return;
-    try { await chrome.runtime.sendMessage({ target: 'offscreen', type: MessageType.CaptureStop, tabId }); } catch { /* already gone */ }
+    try { await withTimeout(chrome.runtime.sendMessage({ target: 'offscreen', type: MessageType.CaptureStop, tabId }), CHROME_API_TIMEOUT_MS, 'Offscreen capture stop'); } catch { /* already gone */ }
   }
 
   private async startCaptureInternal(tabId: number): Promise<Record<string, unknown>> {
@@ -261,14 +342,16 @@ export class CaptureManager {
       }
       if (!capture.streamId) throw new Error('Chrome did not return a tab audio stream id.');
 
-      const result = responseRecord(await chrome.runtime.sendMessage({
+      const result = responseRecord(await withTimeout(chrome.runtime.sendMessage({
         target: 'offscreen',
         type: MessageType.CaptureStart,
         tabId,
         streamId: capture.streamId,
         state: this.stateProvider.getAudioState(),
-        protection: this.stateProvider.getProtection()
-      }));
+        protection: this.stateProvider.getProtection(),
+        stateRevision: this.currentStateRevision(),
+        protectionRevision: this.currentProtectionRevision()
+      }), CHROME_API_TIMEOUT_MS, 'Offscreen capture start'));
       if (result.ok !== true) throw new Error(typeof result.error === 'string' ? result.error : 'Audio engine did not start.');
       this.setPhase(tabId, 'active');
       this.recoveryCooldownUntil.delete(tabId);
@@ -286,7 +369,11 @@ export class CaptureManager {
       await this.stopRemoteSessionForRestart(tabId);
       const released = await this.waitForCaptureRelease(tabId, 3000);
       this.setPhase(tabId, released ? 'idle' : 'stopping');
-      if (released) await this.maybeCloseOffscreen();
+      if (released) {
+        this.stateWriters.delete(tabId);
+        this.stateWriterActive.delete(tabId);
+        await this.maybeCloseOffscreen();
+      }
       return { ok: true, active: false, stopping: !released };
     } catch (error) {
       this.setPhase(tabId, 'idle');
@@ -370,26 +457,34 @@ export class CaptureManager {
     return this.enqueueTabOperation(tabId, () => this.stopCaptureInternal(tabId));
   }
 
-  async propagateState(tabIdValue: unknown, state: AudioState): Promise<boolean> {
+  async propagateState(tabIdValue: unknown, state: AudioState, revision = this.currentStateRevision()): Promise<boolean> {
     const tabId = validTabId(tabIdValue);
-    if (tabId === null || !(await this.hasOffscreenDocument())) return false;
-    try {
-      const result = responseRecord(await chrome.runtime.sendMessage({ target: 'offscreen', type: MessageType.StateSet, state, tabId }));
-      if (result.active) this.setPhase(tabId, 'active');
-      return Boolean(result.active);
-    } catch { return false; }
+    if (tabId === null) return false;
+    await this.stateWriterFor(tabId).submit({ revision, value: state });
+    return this.stateWriterActive.get(tabId) === true;
   }
 
-  async propagateProtection(protection: ProtectionMode): Promise<void> {
+  async propagateStateToAll(state: AudioState, revision = this.currentStateRevision()): Promise<void> {
     if (!(await this.hasOffscreenDocument())) return;
-    try { await chrome.runtime.sendMessage({ target: 'offscreen', type: MessageType.ProtectionSet, protection }); } catch { /* no receiver */ }
+    try {
+      await withTimeout(
+        chrome.runtime.sendMessage({ target: 'offscreen', type: MessageType.StateSet, state, revision }),
+        CHROME_API_TIMEOUT_MS,
+        'Offscreen global state update'
+      );
+    } catch { /* a later status/state mutation can retry */ }
+  }
+
+  async propagateProtection(protection: ProtectionMode, revision = this.currentProtectionRevision()): Promise<void> {
+    try { await this.protectionWriter.submit({ revision, value: protection }); }
+    catch { /* a later status/protection mutation can retry */ }
   }
 
   async meter(tabIdValue: unknown, spectrum: boolean, spectrumMode: SpectrumMode = 'balanced', levels = true): Promise<Record<string, unknown>> {
     const tabId = validTabId(tabIdValue);
     if (tabId === null || !(await this.hasOffscreenDocument())) return { ok: true, active: false, meter: null };
     try {
-      return responseRecord(await chrome.runtime.sendMessage({ target: 'offscreen', type: MessageType.MeterGet, tabId, spectrum, spectrumMode, levels }));
+      return responseRecord(await withTimeout(chrome.runtime.sendMessage({ target: 'offscreen', type: MessageType.MeterGet, tabId, spectrum, spectrumMode, levels }), CHROME_API_TIMEOUT_MS, 'Offscreen meter'));
     } catch {
       return { ok: true, active: false, meter: null };
     }
@@ -417,6 +512,10 @@ export class CaptureManager {
       phase: this.phaseFor(tabId),
       state: active && remote?.state ? normalizeAudioState(remote.state) : this.stateProvider.getAudioState(),
       protection: this.stateProvider.getProtection(),
+      stateAuthoritative: this.stateIsAuthoritative(),
+      protectionAuthoritative: this.protectionIsAuthoritative(),
+      stateRevision: this.currentStateRevision(),
+      protectionRevision: this.currentProtectionRevision(),
       sampleRate: remote && Number.isFinite(Number(remote.sampleRate)) ? Number(remote.sampleRate) : null,
       trackReadyState: remote?.trackReadyState ?? null,
       trackMuted: remote?.trackMuted ?? null,
@@ -426,13 +525,19 @@ export class CaptureManager {
   }
 
   async reconcileExistingCaptures(): Promise<void> {
-    const remote = await this.queryOffscreenStatus();
-    const remoteTabs = new Set((remote?.activeTabs || []).map(Number).filter(Number.isInteger));
+    // Recovery is destructive (stop/release/start), so never infer an orphan
+    // from an uncertain IPC/API result. Require both sides to answer reliably.
+    const [remote, browserCaptures] = await Promise.all([
+      this.queryOffscreenStatusConfirmed(),
+      this.capturedTabsReliable()
+    ]);
+    if (!remote || browserCaptures === null) return;
+
+    const remoteTabs = new Set((remote.activeTabs || []).map(Number).filter(Number.isInteger));
     for (const tabId of remoteTabs) {
       this.setDesired(tabId, true);
       this.setPhase(tabId, 'active');
     }
-    const browserCaptures = await this.capturedTabs();
     for (const info of browserCaptures) {
       if (!info || !Number.isInteger(info.tabId) || info.status === 'stopped' || info.status === 'error') continue;
       this.setDesired(info.tabId, true);

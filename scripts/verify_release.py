@@ -15,9 +15,12 @@ with zipfile.ZipFile(release) as z:
     assert len(names) == len(set(names)), 'duplicate release entries'
     assert all(info.date_time == (2020,1,1,0,0,0) for info in z.infolist()), 'non-deterministic timestamps'
     assert 'manifest.json' in names and 'popup.html' in names and 'offscreen.html' in names
+    assert 'js/audio/pitch-worklet-processor.js' in names and 'js/audio/pitch-shift-core.js' in names
+    assert 'LICENSE' in names, 'MIT license missing from release archive'
     assert not any(name.startswith(('src/','tests/','scripts/')) for name in names)
     packed_manifest = json.loads(z.read('manifest.json'))
     assert packed_manifest['version'] == version
+    assert len(packed_manifest['description']) <= 132
     assert set(packed_manifest['permissions']) == {'activeTab','tabCapture','offscreen','storage'}
     assert 'host_permissions' not in packed_manifest
     js = '\n'.join(z.read(name).decode('utf-8') for name in names if name.endswith('.js'))
@@ -29,6 +32,8 @@ with zipfile.ZipFile(source) as z:
     assert names == sorted(names), 'source archive order is not deterministic'
     assert all(info.date_time == (2020,1,1,0,0,0) for info in z.infolist()), 'non-deterministic source timestamps'
     assert 'src/audio/audio-session.ts' in names and 'tests/golden_eq_response_browser.py' in names
+    assert 'src/audio/pitch-worklet-processor.ts' in names and 'tests/pitch_shift_perf.test.mjs' in names and 'tests/pitch_down_only.test.mjs' in names
+    assert 'tests/new_stage_dry_path_browser.py' in names and 'tests/pitch_shift_browser.py' in names
     assert 'LICENSE' in names, 'MIT license missing from source archive'
     assert not any('node_modules/' in name for name in names)
 
