@@ -50,6 +50,7 @@ Offscreen-document create/close operations share one lifecycle queue and consult
 - `StereoStage` implements Mid/Side Width, Balance, Mono, and Swap.
 - `ReverbStage` and `AutoPanStage` are the public post-Protection creative effects. `DelayStage`/`ExciterStage` remain compatibility-only internals and normalize permanently disabled in 1.23.5.
 - `GranularPitchShifter` remains the compatibility wrapper name for the DOM-independent Pitch Down core. Public/state normalization clamps positive shifts to 0; the accepted 1.23.1 negative-shift path handles −1…−12 semitones, and `pitch-worklet-processor.js` is the thin AudioWorklet wrapper.
+- Maximum Protection deliberately reuses the exact Strong primary compressor profile. Its only extra DSP is a lazily loaded post-effects true-peak-aware peak catcher before the final output bus. There is no fixed Auto Headroom/pre-attenuation path; below-ceiling material remains unity through the catcher apart from its lookahead delay.
 - `NativeEqResponse` uses `BiquadFilterNode.getFrequencyResponse()` for graph visualization.
 - Popup orchestration is separated from `EqUI`, `MeterUI`, `PresetUI`, and `PanelManager`.
 

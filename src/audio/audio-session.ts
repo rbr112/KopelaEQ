@@ -12,6 +12,9 @@ interface DynamicsBand {
   compressor: DynamicsCompressorNode;
 }
 
+const MAXIMUM_CROSSFADE_SECONDS = 0.004;
+const MAXIMUM_WARMUP_MS = 8;
+
 export interface AudioSessionHealth {
   trackReadyState: MediaStreamTrackState | null;
   trackMuted: boolean;
@@ -24,6 +27,8 @@ export interface AudioSessionOptions {
   onHealthChange?: (tabId: number, health: AudioSessionHealth) => void | Promise<void>;
   /** True only after offscreen loaded pitch-worklet-processor.js into this context. */
   pitchWorkletReady?: boolean;
+  /** True only after offscreen loaded true-peak-limiter-processor.js into this context. */
+  maximumLimiterWorkletReady?: boolean;
 }
 
 export function safeDisconnect(node: AudioNode | null | undefined, destination?: AudioNode): void {
@@ -133,6 +138,16 @@ export class AudioSession {
 
   private readonly reverbStage: ReverbStage;
   private readonly autoPanStage: AutoPanStage;
+  private readonly finalDryGain: GainNode;
+  private readonly maximumWetGain: GainNode;
+  private readonly finalOutputBus: GainNode;
+  private maximumLimiterNode: AudioWorkletNode | null = null;
+  private maximumLimiterReductionDb = 0;
+  private maximumLimiterInputTruePeakDb = -160;
+  private maximumLimiterOutputTruePeakDb = -160;
+  private maximumSafetyEnabled = false;
+  private maximumEngageTimer: ReturnType<typeof setTimeout> | null = null;
+  private maximumDisconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   private readonly spectrumAnalyser: AnalyserNode;
   private readonly preMeterSplitter: ChannelSplitterNode;
@@ -193,6 +208,11 @@ export class AudioSession {
 
     this.reverbStage = new ReverbStage(context);
     this.autoPanStage = new AutoPanStage(context);
+    this.finalDryGain = context.createGain();
+    this.maximumWetGain = context.createGain();
+    this.finalOutputBus = context.createGain();
+    this.finalDryGain.gain.value = 1;
+    this.maximumWetGain.gain.value = 0;
 
     this.spectrumAnalyser = context.createAnalyser();
     this.spectrumAnalyser.fftSize = 8192;
@@ -232,6 +252,9 @@ export class AudioSession {
 
     if (options.pitchWorkletReady && this.state.pitchShift.enabled && Math.abs(this.state.pitchShift.semitones) > 0.0001) {
       this.ensurePitchProcessor();
+    }
+    if (options.maximumLimiterWorkletReady && this.protection === 'maximum') {
+      this.ensureMaximumLimiterProcessor();
     }
     this.applyState(this.state, true);
     this.applyProtection(this.protection, true);
@@ -319,7 +342,14 @@ export class AudioSession {
     // but their runtime stages were retired because normalization permanently disables them.
     this.protectionOut.connect(this.reverbStage.input);
     this.reverbStage.output.connect(this.autoPanStage.input);
-    this.autoPanStage.output.connect(this.context.destination);
+
+    // The final bus keeps Spectrum/output metering on the actual delivered signal.
+    // Strong/Medium/Light use only the identity dry gain; the Maximum worklet is
+    // not even connected to the graph until that mode is selected.
+    this.autoPanStage.output.connect(this.finalDryGain);
+    this.finalDryGain.connect(this.finalOutputBus);
+    this.maximumWetGain.connect(this.finalOutputBus);
+    this.finalOutputBus.connect(this.context.destination);
 
     this.preMeterSplitter.connect(this.preLeftAnalyser, 0);
     this.preMeterSplitter.connect(this.preRightAnalyser, 1);
@@ -342,6 +372,41 @@ export class AudioSession {
     this.pitchNode = node;
     const semitones = node.parameters.get('semitones');
     if (semitones) semitones.value = this.state.pitchShift.semitones;
+  }
+
+  /** Creates Maximum's final true-peak limiter after offscreen loaded its module. */
+  ensureMaximumLimiterProcessor(): void {
+    if (this.maximumLimiterNode || this.disposed) return;
+    if (typeof AudioWorkletNode !== 'function') throw new Error('AudioWorklet is unavailable in this browser context.');
+    const node = new AudioWorkletNode(this.context, 'kopelaeq-true-peak-limiter', {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      outputChannelCount: [2],
+      channelCount: 2,
+      channelCountMode: 'explicit'
+    });
+    node.connect(this.maximumWetGain);
+    node.port.onmessage = (event: MessageEvent) => {
+      const data = event.data as Record<string, unknown> | null;
+      if (!data || data.type !== 'meter') return;
+      const reduction = Number(data.reductionDb);
+      const inputTruePeak = Number(data.inputTruePeakDb);
+      const outputTruePeak = Number(data.outputTruePeakDb);
+      if (Number.isFinite(reduction)) this.maximumLimiterReductionDb = Math.min(0, reduction);
+      if (Number.isFinite(inputTruePeak)) this.maximumLimiterInputTruePeakDb = inputTruePeak;
+      if (Number.isFinite(outputTruePeak)) this.maximumLimiterOutputTruePeakDb = outputTruePeak;
+    };
+    this.maximumLimiterNode = node;
+  }
+
+  private disconnectMaximumLimiterInput(): void {
+    if (this.maximumLimiterNode) safeDisconnect(this.autoPanStage.output, this.maximumLimiterNode);
+  }
+
+  private connectMaximumLimiterInput(): void {
+    if (!this.maximumLimiterNode) throw new Error('Maximum true-peak limiter is not ready.');
+    this.disconnectMaximumLimiterInput();
+    this.autoPanStage.output.connect(this.maximumLimiterNode);
   }
 
   private disconnectPitchProcessorInput(): void {
@@ -455,9 +520,69 @@ export class AudioSession {
     this.protectionIn.connect(this.limiter);
   }
 
+  private finalOutputSource(): AudioNode {
+    return this.finalOutputBus;
+  }
+
+  private setMaximumSafetyEnabled(enabled: boolean, immediate = false): void {
+    if (enabled === this.maximumSafetyEnabled) return;
+    if (this.maximumEngageTimer !== null) {
+      clearTimeout(this.maximumEngageTimer);
+      this.maximumEngageTimer = null;
+    }
+    if (this.maximumDisconnectTimer !== null) {
+      clearTimeout(this.maximumDisconnectTimer);
+      this.maximumDisconnectTimer = null;
+    }
+
+    this.maximumSafetyEnabled = enabled;
+    if (enabled) {
+      this.connectMaximumLimiterInput();
+      this.maximumLimiterReductionDb = 0;
+      this.maximumLimiterInputTruePeakDb = -160;
+      this.maximumLimiterOutputTruePeakDb = -160;
+      if (immediate) {
+        this.finalDryGain.gain.value = 0;
+        this.maximumWetGain.gain.value = 1;
+      } else {
+        // The worklet contains a 4 ms lookahead buffer. Keep the historical dry
+        // path fully audible while that buffer fills, then crossfade. Without
+        // this warm-up a live Strong -> Maximum switch would briefly fade toward
+        // an empty delayed buffer and sound like a tiny dropout.
+        this.finalDryGain.gain.value = 1;
+        this.maximumWetGain.gain.value = 0;
+        this.maximumEngageTimer = setTimeout(() => {
+          this.maximumEngageTimer = null;
+          if (!this.maximumSafetyEnabled || this.disposed) return;
+          smooth(this.finalDryGain.gain, 0, this.context, MAXIMUM_CROSSFADE_SECONDS);
+          smooth(this.maximumWetGain.gain, 1, this.context, MAXIMUM_CROSSFADE_SECONDS);
+        }, MAXIMUM_WARMUP_MS);
+      }
+    } else {
+      if (immediate) {
+        this.finalDryGain.gain.value = 1;
+        this.maximumWetGain.gain.value = 0;
+        this.disconnectMaximumLimiterInput();
+      } else {
+        smooth(this.finalDryGain.gain, 1, this.context, MAXIMUM_CROSSFADE_SECONDS);
+        smooth(this.maximumWetGain.gain, 0, this.context, MAXIMUM_CROSSFADE_SECONDS);
+        this.maximumDisconnectTimer = setTimeout(() => {
+          this.maximumDisconnectTimer = null;
+          if (!this.maximumSafetyEnabled) this.disconnectMaximumLimiterInput();
+        }, 40);
+      }
+      this.maximumLimiterReductionDb = 0;
+      this.maximumLimiterInputTruePeakDb = -160;
+      this.maximumLimiterOutputTruePeakDb = -160;
+    }
+  }
+
   applyProtection(next: unknown, immediate = false): void {
     const normalized = normalizeProtection(next);
     const profile = PROTECTION_PROFILES[normalized];
+    if (normalized === 'maximum' && !this.maximumLimiterNode) {
+      throw new Error('Maximum true-peak limiter is not ready.');
+    }
     this.protection = normalized;
     if (profile) {
       if (immediate) {
@@ -468,6 +593,7 @@ export class AudioSession {
         this.limiter.release.value = profile.release;
       } else setCompressor(this.limiter, profile, this.context, 0.012);
     }
+    this.setMaximumSafetyEnabled(normalized === 'maximum', immediate);
     this.protectionGate.setEnabled(Boolean(profile), immediate);
   }
 
@@ -485,8 +611,9 @@ export class AudioSession {
 
   private setSpectrumMeteringConnected(enabled: boolean): void {
     if (enabled === this.spectrumMeteringConnected) return;
-    if (enabled) this.autoPanStage.output.connect(this.spectrumAnalyser);
-    else safeDisconnect(this.autoPanStage.output, this.spectrumAnalyser);
+    const source = this.finalOutputSource();
+    if (enabled) source.connect(this.spectrumAnalyser);
+    else safeDisconnect(source, this.spectrumAnalyser);
     this.spectrumMeteringConnected = enabled;
   }
 
@@ -565,8 +692,14 @@ export class AudioSession {
       postProtection,
       peakDb: postProtection.peakDb,
       rmsDb: postProtection.rmsDb,
-      gainReductionDb: this.protection === 'off' ? 0 : Number(this.limiter.reduction || 0),
-      dynamicsReductionDb: this.getDynamicsReduction()
+      gainReductionDb: this.protection === 'off'
+        ? 0
+        : Math.min(0, Number(this.limiter.reduction || 0))
+          + (this.protection === 'maximum' ? this.maximumLimiterReductionDb : 0),
+      dynamicsReductionDb: this.getDynamicsReduction(),
+      maximumInputTruePeakDb: this.protection === 'maximum' ? this.maximumLimiterInputTruePeakDb : undefined,
+      maximumOutputTruePeakDb: this.protection === 'maximum' ? this.maximumLimiterOutputTruePeakDb : undefined,
+      maximumLimiterReductionDb: this.protection === 'maximum' ? this.maximumLimiterReductionDb : 0
     };
 
     if (includeSpectrum) {
@@ -601,6 +734,10 @@ export class AudioSession {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    if (this.maximumEngageTimer !== null) clearTimeout(this.maximumEngageTimer);
+    this.maximumEngageTimer = null;
+    if (this.maximumDisconnectTimer !== null) clearTimeout(this.maximumDisconnectTimer);
+    this.maximumDisconnectTimer = null;
     this.disconnectMetering();
     this.pitchGate.dispose();
     this.dynamicsGate.dispose();
@@ -619,7 +756,7 @@ export class AudioSession {
       this.normalCompressor, ...this.low.filters, this.low.compressor,
       ...this.mid.filters, this.mid.compressor, ...this.high.filters, this.high.compressor,
       this.protectionIn, this.protectionDry, this.protectionWet, this.protectionOut,
-      this.limiter, this.spectrumAnalyser, this.preMeterSplitter, this.preLeftAnalyser, this.preRightAnalyser,
+      this.limiter, this.finalDryGain, this.maximumWetGain, this.finalOutputBus, this.maximumLimiterNode, this.spectrumAnalyser, this.preMeterSplitter, this.preLeftAnalyser, this.preRightAnalyser,
       this.meterSplitter, this.leftAnalyser, this.rightAnalyser
     ]) safeDisconnect(node);
   }

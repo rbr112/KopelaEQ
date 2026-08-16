@@ -65,7 +65,7 @@ mock=r'''
   const syncStore = {};
   const messages = [];
   const storageStats = {localSets:0,syncSets:0};
-  let liveState = null;
+  let liveState = defaultAudioState();
   let protection = 'strong';
   let active = false;
   const selectedPresets = {};
@@ -128,6 +128,14 @@ with sync_playwright() as p:
     # Heavy Appearance editor is lazy: ordinary EQ popup startup must not bind it.
     assert page.evaluate('appearanceUi===null')
     assert page.evaluate('window.__qa.storageStats.localSets') <= 1
+    # Temporary popup fallbacks are display-only. If authority is lost/delayed,
+    # an early audio interaction must not emit STATE_SET and overwrite storage.
+    assert page.evaluate('stateReadyForInput && protectionReadyForInput')
+    state_sets_before=page.evaluate("window.__qa.messages.filter(m=>m.type==='STATE_SET').length")
+    page.evaluate("() => { stateReadyForInput=false; const el=document.getElementById('pitchEnabled'); el.checked=true; el.dispatchEvent(new Event('change',{bubbles:true})); }")
+    page.wait_for_timeout(20)
+    assert page.evaluate("window.__qa.messages.filter(m=>m.type==='STATE_SET').length")==state_sets_before
+    page.wait_for_function('stateReadyForInput===true')
     assert page.locator('#stereoButton').count()==1
     assert page.locator('#stereoPanel').is_hidden()
     assert page.locator('#effectsButton').count()==1 and page.locator('#effectsPanel').is_hidden()
@@ -739,9 +747,12 @@ with sync_playwright() as p:
 
     page.locator('#protectionButton').click(); page.wait_for_timeout(320)
     assert_rice_workspace('#protectionPanel')
+    page.locator('#protectionPanel [data-protection="maximum"]').click(); page.wait_for_timeout(120)
+    assert page.locator('#maximumProtectionStats').is_visible()
     protection_overflow=page.locator('#protectionPanel').evaluate("e=>({sw:e.scrollWidth,cw:e.clientWidth, leaves:[...e.querySelectorAll('span,strong,output,button')].filter(x=>{const r=x.getBoundingClientRect(),cs=getComputedStyle(x);return r.width>0&&cs.display!=='none'&&x.scrollWidth>x.clientWidth+1}).map(x=>(x.textContent||'').trim())})")
     assert protection_overflow['sw']<=protection_overflow['cw']+1 and not protection_overflow['leaves'], protection_overflow
-    protection_body=page.locator('#protectionPanel .floating-body').bounding_box(); assert protection_body and protection_body['height']<=232, protection_body
+    protection_body=page.locator('#protectionPanel .floating-body').bounding_box(); assert protection_body and protection_body['height']<=160, protection_body
+    protection_scroll=page.locator('#protectionPanel .floating-body').evaluate("e=>({client:e.clientHeight,scroll:e.scrollHeight,overflow:getComputedStyle(e).overflowY})"); assert protection_scroll['scroll']<=protection_scroll['client']+1 and protection_scroll['overflow']!='scroll', protection_scroll
     protection_close=page.locator('#protectionPanel [data-close]').bounding_box(); assert protection_close and protection_close['width']>=31.5 and protection_close['height']>=31.5, protection_close
     page.screenshot(path=str(BASE/'qa'/f'popup-rice-protection-{VERSION}.png'))
     page.locator('#protectionPanel [data-close]').click(); page.wait_for_timeout(320)
@@ -880,6 +891,8 @@ with sync_playwright() as p:
     page.locator('#protectionButton').click(); page.wait_for_timeout(180)
     assert_noct_workspace('#protectionPanel')
     assert page.locator('.primary-surface').bounding_box()==noct_primary_before
+    assert page.locator('#maximumProtectionStats').is_visible()
+    noct_protection_scroll=page.locator('#protectionPanel .floating-body').evaluate("e=>({client:e.clientHeight,scroll:e.scrollHeight,overflow:getComputedStyle(e).overflowY})"); assert noct_protection_scroll['scroll']<=noct_protection_scroll['client']+1 and noct_protection_scroll['overflow']!='scroll', noct_protection_scroll
     page.screenshot(path=str(BASE/'qa'/f'popup-nocturne-protection-{VERSION}.png'))
     page.locator('#protectionPanel [data-close]').click(); page.wait_for_timeout(160)
     page.locator('#effectsButton').click(); page.locator('#pitchButton').click(); page.wait_for_timeout(180)
@@ -927,7 +940,7 @@ with sync_playwright() as p:
     # Simulate a brand-new popup document while the tab's selected preset already
     # exists in durable background storage: the label must restore immediately.
     reopen=browser.new_page(viewport={"width":800,"height":580}, device_scale_factor=1)
-    seeded_mock=mock.replace('const selectedPresets = {};', "const selectedPresets = {'42':'Bass Heavy (bass4)'};").replace('let liveState = null;', "let liveState = S.presetToAudioState(DEFAULT_PRESETS['Bass Heavy (bass4)']); liveState.gainDb = 3;")
+    seeded_mock=mock.replace('const selectedPresets = {};', "const selectedPresets = {'42':'Bass Heavy (bass4)'};").replace('let liveState = defaultAudioState();', "let liveState = S.presetToAudioState(DEFAULT_PRESETS['Bass Heavy (bass4)']); liveState.gainDb = 3;")
     reopened_content=html.replace('<link rel="stylesheet" href="popup.css">', '<style>'+css+'</style>').replace('<link rel="stylesheet" href="appearance-layouts.css">', '<style>'+appearance_css+'</style>').replace('<link rel="stylesheet" href="appearance-layouts.css">', '<style>'+appearance_css+'</style>')
     reopened_content=reopened_content.replace('<script type="module" src="js/popup/index.js"></script>', '<script>'+prelude+'</script><script>'+seeded_mock+'</script><script>'+popup+'</script>')
     reopen.set_content(reopened_content, wait_until='load'); reopen.wait_for_timeout(160)
@@ -937,7 +950,7 @@ with sync_playwright() as p:
     # Recovery for the historical race: matching DSP state with a missing stored
     # preset identity is inferred once and healed back into per-tab storage.
     recover=browser.new_page(viewport={"width":800,"height":580}, device_scale_factor=1)
-    recover_mock=mock.replace('let liveState = null;', "let liveState = S.presetToAudioState(DEFAULT_PRESETS['Vivid (111)']); liveState.gainDb = 2;")
+    recover_mock=mock.replace('let liveState = defaultAudioState();', "let liveState = S.presetToAudioState(DEFAULT_PRESETS['Vivid (111)']); liveState.gainDb = 2;")
     recover_content=html.replace('<link rel="stylesheet" href="popup.css">', '<style>'+css+'</style>').replace('<link rel="stylesheet" href="appearance-layouts.css">', '<style>'+appearance_css+'</style>').replace('<link rel="stylesheet" href="appearance-layouts.css">', '<style>'+appearance_css+'</style>')
     recover_content=recover_content.replace('<script type="module" src="js/popup/index.js"></script>', '<script>'+prelude+'</script><script>'+recover_mock+'</script><script>'+popup+'</script>')
     recover.set_content(recover_content, wait_until='load'); recover.wait_for_timeout(160)

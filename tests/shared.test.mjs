@@ -86,6 +86,9 @@ const renamed = S.migrateBundledPresetNames({ Vivid: defaults['Vivid (111)'], 'B
 assert.ok(renamed['Vivid (111)']);
 assert.ok(renamed['Bass Punch (bass2)']);
 assert.equal(renamed.Vivid, undefined);
+assert.deepEqual(S.PROTECTION_PROFILES.maximum,S.PROTECTION_PROFILES.strong,'Maximum primary stage must stay identical to Strong; extra safety is post-effects only');
+assert.equal(S.normalizeProtection(undefined), 'strong');
+assert.equal(S.normalizeProtection('maximum'), 'maximum');
 assert.ok(S.PROTECTION_PROFILES.strong.threshold >= -0.2);
 assert.ok(S.PROTECTION_PROFILES.strong.knee <= 0.2);
 assert.ok(S.PROTECTION_PROFILES.strong.release <= 0.05);

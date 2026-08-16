@@ -1,6 +1,6 @@
-# KopelaEQ 1.28.8 — QA report
+# KopelaEQ 1.28.15 — QA report
 
-1.28.8 is an icon-only refinement over 1.28.7. Frozen EQ response, accepted Pitch Down output, preset signal data, Protection tuning, permissions, serialized state schema, and async/MV3 lifecycle behavior remain unchanged.
+1.28.15 removes the rejected fixed Auto Headroom experiment. Maximum now uses the exact Strong primary Protection profile plus the existing post-effects true-peak-aware AudioWorklet. Below-ceiling material remains at unity gain; only short final peaks are attenuated by the extra stage.
 
 ## Automated / reproducible results
 
@@ -9,12 +9,19 @@
 - StateSet adversarial burst: PASS; 24 rapid intents collapse to 2 storage + 2 runtime writes and finish on the newest state
 - Protection adversarial burst: PASS; delayed Light followed by newer modes finishes with storage/runtime on Strong
 - Slow background startup authority + stale-response generation tests: PASS
+- MV3 service-worker restart with surviving offscreen revision epoch: PASS; first post-restart state/Pitch mutation reaches runtime
+- Popup temporary fallback interaction guard: PASS; no `STATE_SET` is emitted before background authority
+- Transient cold Pitch Worklet load retry: PASS; applied revision advances only after graph readiness
 - Offscreen stale Worklet completion generation test: PASS
 - Rice/Nocturne appearance latest-wins race test: PASS
 - Artwork/background crash-recovery journal + custom-theme deletion ordering test: PASS
 - Cross-tab shared offscreen lifecycle Start/Stop race: PASS
 - Typed Pitch Worklet wrapper integration: PASS
-- Node regression suites: 33/33 PASS
+- Maximum true-peak limiter core: PASS; quarter-sample-phase 12 kHz hidden inter-sample peak detected and independently reconstructed output remains below target
+- Maximum stereo-link / lookahead / worklet failure-retry regressions: PASS
+- Maximum core CPU guard: PASS; 4× detection only, no full-rate 4× audio oversampling
+- Maximum sub-ceiling unity / isolated-transient recovery regressions: PASS
+- Node regression suites: 42/42 PASS
 - Allocation-free Pitch latency helper: PASS; popup imports `pitch-latency.js`, not the realtime Pitch core
 - Meter single-flight regression under overlapping ticks: PASS
 - Partial realtime control synchronization / EQ-only redraw contract: implementation/static + UI gate
@@ -42,7 +49,7 @@
 - DSP crossover math: PASS
 - Stereo math: PASS
 - Pitch performance: p95/p99 + callback-deadline miss-rate gate
-- Pitch browser capability probe: expected SKIP in supplied headless Chromium when `audioWorklet.addModule` is unavailable
+- Pitch/Maximum AudioWorklet browser capability remains a manual Chrome Stable gate when supplied headless Chromium lacks `audioWorklet.addModule`
 - Deterministic release/source archive verification: PASS after release build
 
 
@@ -74,6 +81,9 @@
 - Important service-worker Chrome API/offscreen IPC operations are time-bounded.
 - AudioState/Protection persistence is background-owned, versioned, single-flight/latest-wins.
 - Offscreen state/protection application is revision-guarded across asynchronous waits.
+- Surviving offscreen revisions are rebased into the new service-worker epoch before post-restart state mutations are accepted.
+- Popup storage fallback is display-only until authoritative background state/protection arrive; temporary defaults cannot be persisted by early interaction.
+- Requested and actually-applied offscreen state revisions are tracked separately so failed Pitch Worklet setup cannot report a false applied state.
 - Shared offscreen create/close operations are serialized and veto close while any `desiredTabs` start intent exists.
 - Capture reconciliation retries transient offscreen IPC and skips destructive recovery when either offscreen or browser capture state is uncertain.
 - Playwright UI QA runs in a separate OS process group; descendants are terminated before later browser gates.
@@ -82,7 +92,7 @@
 
 Before public Store release:
 
-1. Load `kopelaeq-1.28.8.zip` in current Chrome Stable.
+1. Load `kopelaeq-1.28.15.zip` in current Chrome Stable.
 2. Verify rapid popup reopen/restart/update with existing presets and custom themes.
 3. Upload large-but-allowed PNG/WebP and animated GIF media; verify rejected oversized media reports a clear error.
 4. Test rapid Rice ↔ Nocturne switching during media upload.

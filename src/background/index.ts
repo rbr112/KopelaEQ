@@ -53,7 +53,15 @@ const captures = new CaptureManager({
   getStateRevision: () => stateRevision,
   getProtectionRevision: () => protectionRevision,
   isStateAuthoritative: () => stateAuthoritative,
-  isProtectionAuthoritative: () => protectionAuthoritative
+  isProtectionAuthoritative: () => protectionAuthoritative,
+  rebaseStateRevision: (remoteRevision: number) => {
+    if (Number.isInteger(remoteRevision) && remoteRevision >= stateRevision) stateRevision = remoteRevision + 1;
+    return stateRevision;
+  },
+  rebaseProtectionRevision: (remoteRevision: number) => {
+    if (Number.isInteger(remoteRevision) && remoteRevision >= protectionRevision) protectionRevision = remoteRevision + 1;
+    return protectionRevision;
+  }
 });
 
 function stringRecord(value: unknown): Record<string, unknown> {
@@ -213,14 +221,32 @@ async function updateAudioState(next: unknown, tabIdValue: unknown = null, prese
 
 async function updateProtection(next: unknown): Promise<Record<string, unknown>> {
   const normalized = normalizeProtection(next);
+  const previous = protection;
   const revision = ++protectionRevision;
   protection = normalized;
   protectionAuthoritative = true;
-  await Promise.all([
-    protectionStorageWriter.submit({ revision, value: normalized }),
-    captures.propagateProtection(normalized, revision)
-  ]);
-  return { ok: true, protection, revision: protectionRevision };
+
+  try {
+    // Runtime first: Maximum needs an AudioWorklet. Do not durably persist a mode
+    // the active engine could not actually construct. Inactive captures return
+    // immediately and the preference is still persisted normally.
+    await captures.propagateProtection(normalized, revision);
+    if (revision === protectionRevision) {
+      await protectionStorageWriter.submit({ revision, value: normalized });
+    }
+    return { ok: true, protection, revision: protectionRevision };
+  } catch (error) {
+    // If this is still the newest intent, converge memory/runtime/storage back to
+    // the last working mode. A newer user click owns the state and must not be
+    // undone by an older failed Maximum request.
+    if (revision === protectionRevision) {
+      protection = previous;
+      const rollbackRevision = ++protectionRevision;
+      await captures.propagateProtection(previous, rollbackRevision).catch(() => undefined);
+      await protectionStorageWriter.submit({ revision: rollbackRevision, value: previous }).catch(() => undefined);
+    }
+    throw error;
+  }
 }
 
 async function getSelectedPreset(tabIdValue: unknown): Promise<Record<string, unknown>> {

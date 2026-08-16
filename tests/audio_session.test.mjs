@@ -28,7 +28,7 @@ assert.equal(session.pitchDry.gain.value,1); assert.equal(session.pitchWet.gain.
 assert.equal(session.dynamicsDry.gain.value,1); assert.equal(session.dynamicsWet.gain.value,0);
 assert.equal(session.stereoStage.dry.gain.value,1); assert.equal(session.stereoStage.wet.gain.value,0);
 assert.equal(session.protectionDry.gain.value,1); assert.equal(session.protectionWet.gain.value,0);
-assert.ok(session.autoPanStage.output.connections.some(c=>c.dest===ctx.destination));
+assert.ok(session.autoPanStage.output.connections.some(c=>c.dest===session.finalDryGain)); assert.ok(session.finalOutputBus.connections.some(c=>c.dest===ctx.destination));
 
 const next=S.clone(state); next.dynamics.enabled=true; next.dynamics.mode='multiband'; next.dynamics.amount=.6; next.stereo.enabled=true; next.stereo.width=1.5; next.delay.enabled=true; next.delay.mix=.25; next.exciter.enabled=true; next.exciter.amount=.5;
 session.applyState(next,true);
@@ -43,9 +43,9 @@ const activeMeter=session.getMeter(false,'balanced',true); assert.equal(activeMe
 session.applyProtection('off',true); assert.ok(session.protectionIn.connections.some(c=>c.dest===session.protectionDry)); assert.ok(!session.protectionIn.connections.some(c=>ctx.compressors.includes(c.dest)));
 const meter=session.getMeter(true,'fast',true); assert.equal(meter.sampleRate,48000); assert.equal(meter.spectrum.length,96); assert.ok(meter.peakDb<0); assert.ok(meter.preProtection&&meter.postProtection); assert.equal(ctx.analysers[0].smoothingTimeConstant,.15);
 assert.ok(session.protectionIn.connections.some(c=>c.dest.kind==='splitter')); assert.ok(session.protectionOut.connections.some(c=>c.dest.kind==='splitter'));
-assert.ok(session.autoPanStage.output.connections.some(c=>c.dest.kind==='analyser')); assert.ok(ctx.analysers.every(a=>a.connections.length===0));
+assert.ok(session.finalOutputBus.connections.some(c=>c.dest.kind==='analyser')); assert.ok(ctx.analysers.every(a=>a.connections.length===0));
 const smooth=session.getMeter(true,'smooth');assert.equal(smooth.spectrum.length,96);assert.equal(ctx.analysers[0].smoothingTimeConstant,.82);
-const spectrumOnly=session.getMeter(true,'balanced',false);assert.equal(spectrumOnly.preProtection.peakDb,-120);assert.equal(session.protectionIn.connections.filter(c=>c.dest.kind==='splitter').length,0);assert.equal(session.protectionOut.connections.filter(c=>c.dest.kind==='splitter').length,0);assert.ok(session.autoPanStage.output.connections.some(c=>c.dest.kind==='analyser'));
-const levelsOnly=session.getMeter(false,'balanced',true);assert.ok(levelsOnly.preProtection.peakDb>-120);assert.ok(session.protectionIn.connections.some(c=>c.dest.kind==='splitter'));assert.ok(session.protectionOut.connections.some(c=>c.dest.kind==='splitter'));assert.ok(!session.autoPanStage.output.connections.some(c=>c.dest.kind==='analyser'));
+const spectrumOnly=session.getMeter(true,'balanced',false);assert.equal(spectrumOnly.preProtection.peakDb,-120);assert.equal(session.protectionIn.connections.filter(c=>c.dest.kind==='splitter').length,0);assert.equal(session.protectionOut.connections.filter(c=>c.dest.kind==='splitter').length,0);assert.ok(session.finalOutputBus.connections.some(c=>c.dest.kind==='analyser'));
+const levelsOnly=session.getMeter(false,'balanced',true);assert.ok(levelsOnly.preProtection.peakDb>-120);assert.ok(session.protectionIn.connections.some(c=>c.dest.kind==='splitter'));assert.ok(session.protectionOut.connections.some(c=>c.dest.kind==='splitter'));assert.ok(!session.finalOutputBus.connections.some(c=>c.dest.kind==='analyser'));
 session.dispose();assert.equal(stopped,true);
 console.log('audio_session.test.mjs: PASS');

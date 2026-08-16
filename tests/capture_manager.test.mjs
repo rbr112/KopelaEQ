@@ -133,6 +133,18 @@ assert.ok(streamIdCalls>baselineCalls,'ended track should trigger controlled rec
 await manager2.stopCapture(51);
 
 
+// A captured tab whose AudioContext is not running is not healthy: Chrome has
+// already suppressed native tab playback, so keeping this session would be silent.
+await manager2.startCapture(52);
+baselineCalls=streamIdCalls;
+sessions.get(52).contextState='suspended';
+r=await manager2.startCapture(52);
+assert.equal(r.ok,true);
+assert.ok(streamIdCalls>baselineCalls,'suspended output context should force a controlled recapture');
+assert.equal(sessions.get(52).contextState,'running');
+await manager2.stopCapture(52);
+
+
 // Restart reconciliation must not tear down a healthy browser capture because
 // the first offscreen status probes fail transiently.
 await manager2.startCapture(61);

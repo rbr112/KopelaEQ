@@ -1,4 +1,4 @@
-# KopelaEQ 1.28.8 release checklist
+# KopelaEQ 1.28.15 release checklist
 
 ## Automated / reproducible gates
 
@@ -6,6 +6,10 @@
 - [x] Browser-native ESM build passes.
 - [x] StateSet/Protection latest-wins adversarial delay tests pass.
 - [x] Background slow-start authority and stale startup response tests pass.
+- [x] MV3 service-worker restart rebases surviving offscreen AudioState/Protection revision epochs.
+- [x] The first post-restart EQ/Gain/Pitch state mutation reaches the surviving runtime.
+- [x] Popup temporary fallback cannot emit `STATE_SET` or Protection mutation before background authority.
+- [x] Transient cold Pitch Worklet load retries and applied revision advances only after graph readiness.
 - [x] Offscreen stale-response generation test passes across delayed Worklet loading.
 - [x] Appearance identity latest-wins test passes.
 - [x] Artwork/background recovery journal and custom-theme deletion ordering tests pass.
@@ -18,7 +22,7 @@
 - [x] `noUnusedLocals` / `noUnusedParameters` are enabled in the normal TypeScript gate.
 - [x] Stale debug UI QA and obsolete fallback build wrapper are removed.
 - [x] Generic popup CSS has no exact duplicate selectors; the historical Band Inspector patch stack is removed.
-- [x] Node regression tests pass (33/33).
+- [x] Node regression tests pass (42/42).
 - [x] Slow Appearance storage cannot repair/overwrite a valid stored custom theme.
 - [x] Slow preset storage performs no bundled-default write and preserves existing user presets before mutation.
 - [x] Surface/custom-theme/media-hint whole-map writes require authoritative storage.
@@ -44,7 +48,7 @@
 
 ## Manual Chrome Stable smoke test
 
-- [ ] Load final `kopelaeq-1.28.8.zip` unpacked in current Chrome Stable.
+- [ ] Load final `kopelaeq-1.28.15.zip` unpacked in current Chrome Stable.
 - [ ] Confirm saved Rice/Nocturne appearance and preloaded Rice artwork on normal startup.
 - [ ] Confirm existing custom themes/presets survive rapid reopen and browser restart.
 - [ ] Upload/replace/remove Artwork and Background while rapidly switching Rice/Nocturne.
@@ -55,10 +59,16 @@
 - [ ] Confirm Stereo, Protection, Reverb and 8D.
 - [ ] Confirm Pitch Down on real speech at representative negative values.
 - [ ] Confirm power/capture Start/Stop and browser restart with a real media tab.
+- [ ] Let the MV3 service worker go idle/terminate while capture remains active, reopen the popup, then verify the **first** Gain and Pitch change reaches the audible runtime and survives popup reopen.
+- [ ] With saved non-default Gain/Pitch settings, open the popup during a deliberately slow startup and confirm no temporary default can overwrite the saved state.
 - [ ] Run a 30–60 minute Pitch Down CPU/RAM/listening soak.
 
 ## Publication
 
-- [ ] Attach `kopelaeq-1.28.8.zip`, `kopelaeq-1.28.8-source.zip`, `SHA256SUMS.txt`, release notes and QA report to the GitHub release.
+- [ ] Attach `kopelaeq-1.28.15.zip`, `kopelaeq-1.28.15-source.zip`, `SHA256SUMS.txt`, release notes and QA report to the GitHub release.
 - [ ] Host the current privacy policy at a public HTTPS URL and complete Chrome Web Store privacy/data-use declarations.
-- [ ] Use current 1.28.8 screenshots only.
+- [ ] Use current 1.28.15 screenshots only.
+
+- [x] Maximum true-peak core passes hidden inter-sample, stereo-link, independent reconstruction and worklet failure/retry regressions.
+- [x] Maximum has no fixed headroom cut; sub-ceiling unity and isolated-transient recovery regressions pass.
+- [ ] Smoke-test Maximum in normal Chrome Stable for audible switching, CPU and no dropouts with Pitch + Spectrum.

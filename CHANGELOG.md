@@ -1,5 +1,58 @@
 # Changelog
 
+## 1.28.15
+
+- Remove the experimental Maximum Auto Headroom/pre-attenuation path entirely; Maximum no longer lowers the whole signal just because Gain/EQ is boosted.
+- Make Maximum's primary Protection stage identical to Strong, so the only extra processing is the final post-effects true-peak peak catcher.
+- Retune the final catcher to a −1.25 dBTP target, ~5 ms lookahead, 6 ms transient hold and ~80 ms release for peak-only intervention without rapid gain bounce.
+- Add a sub-ceiling unity regression proving Maximum has no fixed gain cut, plus an isolated-transient recovery regression.
+- Simplify Maximum telemetry to final True Peak and Peak Catch reduction; remove obsolete Headroom UI/state.
+- Node regression suites are 42/42 PASS; frozen EQ and non-Maximum dry paths remain unchanged.
+
+## 1.28.14
+
+- Make Maximum materially more conservative with predictive **Auto Headroom** before EQ: positive Master Gain and the strongest positive EQ boosts produce up to 6 dB of smooth pre-attenuation.
+- Keep Auto Headroom deterministic from user settings rather than program loudness, avoiding AGC-style pumping; Strong/Medium/Light/Off remain unity on this input stage.
+- Keep Maximum's post-effects true-peak-aware lookahead worklet from 1.28.13 as the final safety stage.
+- Expose Maximum telemetry in the Protection panel: current Auto Headroom, final true peak and final-limiter gain reduction.
+- Include Auto Headroom in total Protection gain-reduction telemetry so the UI reflects the complete Maximum attenuation.
+- Add dedicated Auto Headroom regressions and extend Maximum topology/telemetry coverage; Node suites are now 43/43 PASS.
+
+## 1.28.13
+
+- Replace Maximum's second `DynamicsCompressorNode` with a dedicated post-effects `AudioWorklet` limiter; Strong remains the unchanged default/recommended mode.
+- Add stereo-linked 4× polyphase true-peak detection that catches inter-sample peaks the raw sample stream can miss.
+- Add ~4 ms lookahead, conservative −1 dBTP target with 0.35 dB internal margin, linked emergency sample ceiling, and post-limit true-peak feedback.
+- Keep the Maximum worklet physically disconnected in Strong/Medium/Light/Off; live Strong → Maximum switching warms the lookahead buffer before crossfade to avoid a short dropout.
+- Make Maximum worklet loading retryable and revision-guarded; a failed load no longer advertises/persists Maximum as if the runtime accepted it.
+- Add independent 16×/64-tap reconstruction tests, hidden inter-sample peak regression, stereo-link tests, failure/retry tests, and a broad CPU regression gate; Node suites are now 42/42 PASS.
+
+## 1.28.11
+
+- Added a new **Maximum** Protection mode above Strong for extra peak headroom.
+- **Strong remains the default and recommended Protection mode**; existing saved settings and fallback behavior are unchanged.
+- Maximum uses the same compressor-only protection path, with an earlier threshold and faster attack than Strong.
+
+
+## 1.28.10
+
+- Require the offscreen Web Audio output context to be truly `running` before a tab capture is reported as active; a suspended output can no longer leave Chrome suppressing the tab's native audio while KopelaEQ outputs silence.
+- Retry `AudioContext.resume()` across the cold-capture transition, including a strict post-`getUserMedia` check after Chromium has granted the active capture.
+- Release captured tracks immediately if the output context still cannot run, restoring native tab playback instead of keeping a silent capture alive.
+- Treat non-running output contexts as unhealthy runtime state and trigger controlled recovery rather than accepting them as healthy sessions.
+- Probe once after capture startup so an already-muted tabCapture track is detected even if no later `mute` event fires.
+- Keep transient offscreen status/IPC failures non-destructive: uncertainty alone never triggers recapture.
+- Add suspended-output/cold-resume/fail-safe regression coverage; Node regression suites are now 36/36 PASS.
+
+## 1.28.9
+
+- Rebase background state/protection revision counters above a surviving offscreen document after an MV3 service-worker restart, preventing fresh user changes from being silently rejected by an older higher runtime revision epoch.
+- Keep offscreen requested-vs-applied state revisions separate so a failed or superseded Pitch Worklet load is never reported as successfully applied.
+- Retry the first Pitch AudioWorklet module load after transient cold-start failures and give Pitch/state application a realistic 3.2 s IPC budget; capture startup gets 5.2 s instead of the generic 900 ms budget.
+- Treat popup storage values as display hints until background confirms authoritative state; early interaction can no longer persist temporary defaults after a slow storage read.
+- Return background desired state from StatusGet instead of stale runtime state, while status reconciliation retries a lagging offscreen session.
+- Add MV3 restart revision and cold Pitch Worklet retry regressions; Node regression suites are now 35/35 PASS.
+
 ## 1.28.8
 
 - Refined the manga catgirl extension icon: removed cheek marks, preserved the full composition at every Chrome icon size, reduced transparent padding, and improved 16/32 px legibility.

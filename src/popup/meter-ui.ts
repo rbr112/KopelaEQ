@@ -66,6 +66,20 @@ export class MeterUI {
     return value <= -100 ? '−∞' : `${value.toFixed(1)} dB`;
   }
 
+  private dbTpLabel(value: number | undefined): string {
+    if (!Number.isFinite(value)) return '—';
+    return Number(value) <= -100 ? '−∞ dBTP' : `${Number(value).toFixed(1)} dBTP`;
+  }
+
+  private updateMaximumStats(meter: MeterSnapshot | null, protection: ProtectionMode): void {
+    if (!this.els.maximumProtectionStats) return;
+    this.els.maximumProtectionStats.hidden = protection !== 'maximum';
+    if (protection !== 'maximum') return;
+    const limiter = Math.abs(Math.min(0, Number(meter?.maximumLimiterReductionDb || 0)));
+    this.els.maximumLimiterValue.textContent = limiter >= 0.05 ? `−${limiter.toFixed(1)} dB` : '0.0 dB';
+    this.els.maximumTruePeakValue.textContent = this.dbTpLabel(meter?.maximumOutputTruePeakDb);
+  }
+
   private meterWidth(db: number, min = -60, max = 3): string {
     return `${Math.max(0, Math.min(100, ((db - min) / (max - min)) * 100))}%`;
   }
@@ -100,6 +114,7 @@ export class MeterUI {
     const m = this.lastMeter;
     const protection = this.getRuntime().protection;
     if (!m) {
+      this.updateMaximumStats(null, protection);
       for (const id of ['preLeftValue','preRightValue','preRmsValue','postLeftValue','postRightValue','postRmsValue','preHoldValue','postHoldValue']) this.els[id].textContent = '−∞';
       this.els.grValue.textContent = '0.0 dB'; this.els.dynGrValue.textContent = '0.0 dB';
       for (const id of ['preLeftBar','preRightBar','preRmsBar','postLeftBar','postRightBar','postRmsBar','grBar','dynGrBar']) {
@@ -113,6 +128,8 @@ export class MeterUI {
       this.els.protectionActivityValue.textContent = '0.0 dB';
       return;
     }
+
+    this.updateMaximumStats(m, protection);
 
     const pre = m.preProtection ?? { leftPeakDb: m.peakDb, rightPeakDb: m.peakDb, peakDb: m.peakDb, rmsDb: m.rmsDb };
     const post = m.postProtection ?? { leftPeakDb: m.peakDb, rightPeakDb: m.peakDb, peakDb: m.peakDb, rmsDb: m.rmsDb };
@@ -145,8 +162,9 @@ export class MeterUI {
     if (this.pollInFlight) return;
     const runtime = this.getRuntime();
     const meterVisible = !this.els.meterPanel.hidden;
+    const protectionVisible = Boolean(this.els.protectionPanel && !this.els.protectionPanel.hidden);
     const needSpectrum = runtime.analyzerEnabled && !runtime.spectrumFrozen;
-    const needLevels = meterVisible;
+    const needLevels = meterVisible || protectionVisible;
     if (!runtime.captureActive || (!needSpectrum && !needLevels) || runtime.activeTabId === null) return;
 
     const generation = this.pollGeneration;
@@ -166,7 +184,7 @@ export class MeterUI {
       }
       this.lastMeter = result.meter ?? null;
       if (!current.spectrumFrozen && this.lastMeter && Array.isArray(this.lastMeter.spectrum)) this.onSpectrum(this.lastMeter.spectrum.slice());
-      if (!this.els.meterPanel.hidden) this.updateMeterUi();
+      if (!this.els.meterPanel.hidden || protectionVisible) this.updateMeterUi();
       if (current.analyzerEnabled) this.onDraw();
     } catch (error: unknown) {
       // Capture can disappear while the popup is polling; only surface durable errors.

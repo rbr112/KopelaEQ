@@ -39,6 +39,7 @@ export const STORAGE = Object.freeze({
 } as const);
 
 export const PROTECTION_PROFILES: Readonly<Record<ProtectionMode, Readonly<CompressorParams> | null>> = Object.freeze({
+  maximum: Object.freeze({ threshold: -0.15, knee: 0.2, ratio: 20, attack: 0.001, release: 0.05 }),
   strong: Object.freeze({ threshold: -0.15, knee: 0.2, ratio: 20, attack: 0.001, release: 0.05 }),
   medium: Object.freeze({ threshold: -0.08, knee: 0.1, ratio: 12, attack: 0.0015, release: 0.04 }),
   light: Object.freeze({ threshold: -0.02, knee: 0.0, ratio: 6, attack: 0.0025, release: 0.03 }),

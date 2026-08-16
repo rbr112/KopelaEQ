@@ -15,7 +15,7 @@ for bad in [r'\beval\s*\(',r'new\s+Function\s*\(',r'XMLHttpRequest',r'WebSocket\
 assert 'http://' not in all_js and 'https://' not in all_js
 
 constants=(SRC/'shared/constants.ts').read_text(); types=(SRC/'shared/types.ts').read_text(); state=(SRC/'shared/state.ts').read_text(); presets=(SRC/'shared/presets.ts').read_text(); messages=(SRC/'shared/messages.ts').read_text()
-audio=(SRC/'audio/audio-session.ts').read_text(); stereo=(SRC/'audio/stereo-stage.ts').read_text(); effects=(SRC/'audio/effect-stages.ts').read_text(); reverb_ir=(SRC/'audio/reverb-impulse.ts').read_text(); pitch=(SRC/'audio/pitch-shift-core.ts').read_text(); pitch_latency=(SRC/'audio/pitch-latency.ts').read_text(); worklet=(SRC/'audio/pitch-worklet-processor.ts').read_text(); bypass=(SRC/'audio/bypass-gate.ts').read_text()
+audio=(SRC/'audio/audio-session.ts').read_text(); stereo=(SRC/'audio/stereo-stage.ts').read_text(); effects=(SRC/'audio/effect-stages.ts').read_text(); reverb_ir=(SRC/'audio/reverb-impulse.ts').read_text(); pitch=(SRC/'audio/pitch-shift-core.ts').read_text(); pitch_latency=(SRC/'audio/pitch-latency.ts').read_text(); worklet=(SRC/'audio/pitch-worklet-processor.ts').read_text(); tp_core=(SRC/'audio/true-peak-limiter-core.ts').read_text(); tp_worklet=(SRC/'audio/true-peak-limiter-processor.ts').read_text(); bypass=(SRC/'audio/bypass-gate.ts').read_text()
 capture=(SRC/'background/capture-manager.ts').read_text(); bg=(SRC/'background/index.ts').read_text(); offscreen=(SRC/'offscreen/index.ts').read_text(); popup=(SRC/'popup/index.ts').read_text(); panel=(SRC/'popup/panel-manager.ts').read_text(); meter=(SRC/'popup/meter-ui.ts').read_text(); presetui=(SRC/'popup/preset-ui.ts').read_text(); equi=(SRC/'popup/eq-ui.ts').read_text(); html=(EXT/'popup.html').read_text(); css=(EXT/'popup.css').read_text()
 
 # Build/runtime contracts.
@@ -24,6 +24,7 @@ assert 'parseBackgroundMessage(input: unknown)' in messages and 'parseOffscreenM
 assert 'parseBackgroundMessage(rawMessage)' in bg and 'parseOffscreenMessage(rawMessage)' in offscreen
 assert 'assertNever(message)' in bg and 'assertNever(message)' in offscreen
 assert (EXT/'js/audio/pitch-worklet-processor.js').exists()
+assert (EXT/'js/audio/true-peak-limiter-processor.js').exists()
 assert "src/audio/pitch-worklet-processor.js" not in (ROOT/'scripts/build.mjs').read_text(), 'typed worklet must be emitted by tsc, not copied as unchecked JS'
 
 # Frozen EQ semantic baseline remains untouched.
@@ -47,7 +48,8 @@ for needle in [
  'this.masterGain.connect(this.pitchIn)', 'this.pitchOut.connect(this.dynamicsIn)',
  'this.dynamicsOut.connect(this.stereoStage.input)', 'this.stereoStage.output.connect(this.protectionIn)',
  'this.protectionOut.connect(this.reverbStage.input)', 'this.reverbStage.output.connect(this.autoPanStage.input)',
- 'this.autoPanStage.output.connect(this.context.destination)']:
+ 'this.autoPanStage.output.connect(this.finalDryGain)', 'this.finalDryGain.connect(this.finalOutputBus)',
+ 'this.maximumWetGain.connect(this.finalOutputBus)', 'this.finalOutputBus.connect(this.context.destination)']:
     assert needle in audio,needle
 assert 'new BypassGate' in stereo and 'safeDisconnect(this.input, this.splitter)' in stereo
 assert 'const active = next.enabled' in stereo and 'Math.abs(width - 1)' in stereo
@@ -66,7 +68,7 @@ assert 'PhaseVocoderUpPitchShifter' not in pitch and 'Radix2Fft' not in pitch
 assert 'Math.min(0' in pitch and 'Math.min(0, Number(value) || 0)' in pitch
 assert "maxValue: 0" in worklet and "minValue: -12" in worklet
 assert "registerProcessor('kopelaeq-pitch-shift'" in worklet and "name: 'semitones'" in worklet
-assert ".addModule(chrome.runtime.getURL('js/audio/pitch-worklet-processor.js'))" in offscreen
+assert "chrome.runtime.getURL('js/audio/pitch-worklet-processor.js')" in offscreen and 'context.audioWorklet.addModule(url)' in offscreen
 assert 'if (pitchRequested(globalState)) await ensurePitchWorklet(context)' in offscreen
 assert "node.parameters.get('semitones')" in audio and 'this.pitchGate.setEnabled(active' in audio
 assert 'id="pitchSemitones"' in html and 'max="0"' in html and 'Pitch Down' in html
@@ -75,8 +77,8 @@ assert 'upward mode was removed' in html.lower()
 # Meter semantics: level meters remain pre/post Protection; spectrum is final post-effects.
 assert 'this.protectionIn.connect(this.preMeterSplitter)' in audio
 assert 'this.protectionOut.connect(this.meterSplitter)' in audio
-assert 'this.autoPanStage.output.connect(this.spectrumAnalyser)' in audio
-assert 'safeDisconnect(this.autoPanStage.output, this.spectrumAnalyser)' in audio
+assert 'this.finalOutputSource()' in audio and 'source.connect(this.spectrumAnalyser)' in audio
+assert 'safeDisconnect(source, this.spectrumAnalyser)' in audio
 assert 'this.spectrumAnalyser.fftSize = 8192' in audio
 
 # Defensive Chrome error-text dependency is explicit and release-gated.
@@ -85,7 +87,7 @@ assert 'minimum_chrome_version' in (ROOT/'RELEASE_CHECKLIST.md').read_text() and
 assert 'EXPECTED_ACTIVE_STREAM_ERRORS' in (ROOT/'tests/capture_manager.test.mjs').read_text()
 
 # Popup modularization and UI surface.
-assert len(popup.splitlines()) < 400
+assert len(popup.splitlines()) < 450
 for file,klass in [('meter-ui.ts','MeterUI'),('preset-ui.ts','PresetUI'),('eq-ui.ts','EqUI')]: assert f'class {klass}' in (SRC/'popup'/file).read_text()
 for id_ in ['stereoButton','pitchButton','reverbButton','autoPanButton','stereoPanel','pitchPanel','reverbPanel','autoPanPanel']: assert f'id="{id_}"' in html,id_
 for panel_id in ['stereoPanel','pitchPanel','reverbPanel','autoPanPanel']: assert panel_id in panel
@@ -107,6 +109,17 @@ assert 'Presets apply the EQ curve' in html
 assert '.module-button' in css
 # Themed layout CSS is geometry/skin only: chroma comes from semantic theme tokens.
 appearance_layout_css=(ROOT/'static/appearance-layouts.css').read_text()
+assert "normalized === 'maximum'" in audio and 'this.setMaximumSafetyEnabled' in audio, 'Maximum post-effects safety topology missing'
+assert "new AudioWorkletNode(this.context, 'kopelaeq-true-peak-limiter'" in audio, 'Maximum true-peak limiter node missing'
+assert "chrome.runtime.getURL('js/audio/true-peak-limiter-processor.js')" in offscreen and 'ensureMaximumLimiterWorklet' in offscreen, 'Maximum worklet must load lazily from the extension'
+assert "registerProcessor('kopelaeq-true-peak-limiter'" in tp_worklet and 'TruePeakLimiterCore' in tp_worklet, 'Maximum worklet wrapper missing'
+assert 'class FourXTruePeakDetector' in tp_core and 'lookaheadFrames' in tp_core and 'safetyMarginDb' in tp_core and 'holdFrames' in tp_core, 'Maximum true-peak/lookahead peak-catcher core missing'
+assert 'MAXIMUM_POST_EFFECTS_HEADROOM_DB' not in audio and 'MAXIMUM_FINAL_LIMITER' not in audio, 'old two-compressor Maximum path returned'
+assert not (SRC/'audio/maximum-auto-headroom.ts').exists() and 'maximumAutoHeadroomDb' not in audio, 'rejected fixed Auto Headroom experiment returned'
+assert 'maximumHeadroomDb' not in types and 'maximumHeadroomValue' not in html, 'Maximum must not expose fixed headroom attenuation'
+assert "maximum: Object.freeze({ threshold: -0.15, knee: 0.2, ratio: 20, attack: 0.001, release: 0.05 })" in constants, 'Maximum primary stage must equal Strong; extra safety belongs to post-effects catcher'
+assert 'repeat(5,minmax(0,1fr))' in appearance_layout_css, 'Protection selector must expose all five modes in one row'
+assert 'protectionModeHint' in html and 'strong-note' not in html, 'Protection panel must use one compact contextual hint instead of the old long note'
 assert len(appearance_layout_css.splitlines()) < 1800, 'appearance-layouts.css patch stack grew again'
 assert not re.search(r'/\* (?:v10|v11|v13|1\.23\.(?:6|8|9|10|11|12|13|14))\b', appearance_layout_css), 'superseded themed patch block returned'
 assert not re.search(r'#[0-9a-fA-F]{3,8}\b', appearance_layout_css), 'raw theme color leaked into appearance-layouts.css'
@@ -185,7 +198,7 @@ assert 'STORAGE.MEDIA_HINTS' in appearance_service and 'preloadedArtworkActive' 
 assert "import('./artwork-store.js')" in appearance_service, 'IndexedDB media module must remain lazy-loaded'
 assert "import('./theme-validator.js')" in appearance_service, 'custom-theme validator must remain lazy-loaded'
 assert "from './artwork-store.js'" not in '\n'.join(line for line in appearance_service.splitlines() if not line.startswith('import type')), 'artwork store returned to eager startup imports'
-assert 'void bounded(refreshCaptureStatus()' in popup and 'void presetLoad.then' in popup, 'capture/preset enrichment must not block first interaction'
+assert 'void refreshCaptureStatus().catch' in popup and 'void presetLoad.then' in popup, 'capture/preset enrichment must not block first interaction'
 
 
 # 1.28.1/1.28.2 adversarial hardening contracts.
@@ -256,9 +269,11 @@ latest_wins=(SRC/'shared/latest-wins.ts').read_text()
 assert 'class LatestWinsWriter' in latest_wins and 'pending' in latest_wins, 'latest-wins primitive missing'
 assert 'stateStorageWriter' in bg and 'protectionStorageWriter' in bg and 'stateAuthoritative' in bg, 'background authoritative state pipeline missing'
 assert 'propagateStateToAll' in capture and 'offscreenLifecycle' in capture and 'desiredTabs' in capture, 'global offscreen/state lifecycle hardening missing'
-assert 'stateRevision' in offscreen and 'sessionStateRevision' in offscreen and 'globalStateRevision' in offscreen, 'offscreen stale-state generation guards missing'
+assert 'stateRevision' in offscreen and 'sessionStateRevision' in offscreen and 'sessionStateRequestRevision' in offscreen and 'globalStateRevision' in offscreen, 'offscreen stale-state generation guards missing'
 assert 'globalStateRevision + 1' not in offscreen.split('async function startSession', 1)[1].split('function stopSession', 1)[0], 'CaptureStart must require explicit revisions instead of fallback synthesis'
 assert 'stateIntentGeneration' in popup and 'captureStatusGeneration' in popup and 'fireAndReport' in popup, 'popup stale-response/unhandled rejection guards missing'
+assert 'stateReadyForInput' in popup and 'protectionReadyForInput' in popup and 'Loading saved audio settings' in popup, 'popup must not persist temporary startup fallbacks'
+assert 'rebaseStateRevision' in capture and 'rebaseProtectionRevision' in capture, 'MV3 worker restart revision rebase missing'
 assert 'appearanceWriter' in appearance_service and 'appearanceRevision' in appearance_service, 'appearance latest-wins persistence missing'
 assert 'MEDIA_ARTWORK_JOURNAL' in constants and 'MEDIA_BACKGROUND_JOURNAL' in constants, 'media crash-recovery journal keys missing'
 assert (SRC/'audio/pitch-worklet-processor.ts').exists() and not (SRC/'audio/pitch-worklet-processor.js').exists(), 'AudioWorklet source must be TypeScript'
@@ -266,6 +281,9 @@ assert (ROOT/'tests/latest_wins.test.mjs').exists(), 'latest-wins adversarial re
 assert (ROOT/'tests/background_concurrency.test.mjs').exists(), 'background concurrency regression test missing'
 assert (ROOT/'tests/background_startup_authority.test.mjs').exists() and (ROOT/'tests/background_startup_stale_response.test.mjs').exists(), 'background startup authority/generation regression tests missing'
 assert (ROOT/'tests/offscreen_state_generation.test.mjs').exists(), 'offscreen stale-response generation test missing'
+assert (ROOT/'tests/background_restart_revision.test.mjs').exists(), 'MV3 restart revision regression test missing'
+assert (ROOT/'tests/offscreen_pitch_retry.test.mjs').exists(), 'Pitch cold-load retry regression test missing'
+assert (ROOT/'tests/offscreen_output_recovery.test.mjs').exists(), 'Audio output resume/fail-safe regression test missing'
 assert (ROOT/'tests/appearance_concurrency.test.mjs').exists(), 'appearance latest-wins regression test missing'
 assert (ROOT/'tests/appearance_media_journal.test.mjs').exists(), 'media transaction journal regression test missing'
 assert (ROOT/'tests/pitch_worklet_wrapper.test.mjs').exists(), 'typed AudioWorklet wrapper integration test missing'

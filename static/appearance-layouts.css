@@ -1362,10 +1362,9 @@ html[data-layout="rice"] .floating-panel[data-presentation="workspace-page"] .fi
 html[data-layout="rice"] .floating-panel[data-presentation="workspace-page"] .slider-field small { display:block; }
 html[data-layout="rice"] #stereoPanel .button-grid.two { grid-template-columns:1fr 1fr;gap:8px; }
 html[data-layout="rice"] #stereoPanel .button-grid.two button { min-height:36px; }
-html[data-layout="rice"] #protectionPanel .strong-note { display:block; }
-html[data-layout="rice"] #protectionOptions.segmented.vertical { grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;max-width:440px;width:100%;margin:0 auto; }
-html[data-layout="rice"] #protectionOptions.segmented.vertical button { min-height:66px;padding:9px 12px;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:3px;text-align:left;white-space:nowrap; }
-html[data-layout="rice"] #protectionOptions :is(strong,span){display:block} html[data-layout="rice"] #protectionOptions strong{font-size:12px;font-weight:680} html[data-layout="rice"] #protectionOptions span{color:var(--muted);font-size:10px;line-height:1.2}
+html[data-layout="rice"] #protectionOptions.segmented.vertical { grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;max-width:460px;width:100%;margin:0 auto; }
+html[data-layout="rice"] #protectionOptions.segmented.vertical button { min-height:44px;padding:5px 4px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;text-align:center;white-space:nowrap; }
+html[data-layout="rice"] #protectionOptions strong{font-size:10px;font-weight:680} html[data-layout="rice"] #protectionOptions .protection-default-mark{display:block;color:var(--muted);font-size:7px;line-height:1}
 html[data-layout="rice"] #effectsPanel .floating-body { gap:8px; }
 html[data-layout="rice"] #effectsPanel .effect-entry {
   min-height:58px;padding:8px 10px;display:grid;grid-template-columns:30px minmax(0,1fr) 52px;gap:10px;border-radius:11px;
@@ -1571,9 +1570,9 @@ html[data-layout="nocturne"] .floating-panel[data-presentation="workspace-page"]
 }
 html[data-layout="nocturne"] .floating-panel[data-presentation="workspace-page"] .workspace-back { display:grid; }
 html[data-layout="nocturne"] #stereoPanel .button-grid.two { grid-template-columns:1fr 1fr;gap:8px; }
-html[data-layout="nocturne"] #protectionOptions.segmented.vertical { grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;max-width:440px;width:100%;margin:0 auto; }
-html[data-layout="nocturne"] #protectionOptions.segmented.vertical button { min-height:66px;padding:9px 12px;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:3px;text-align:left;white-space:nowrap; }
-html[data-layout="nocturne"] #protectionOptions :is(strong,span){display:block} html[data-layout="nocturne"] #protectionOptions strong{font-size:12px;font-weight:680} html[data-layout="nocturne"] #protectionOptions span{color:var(--muted);font-size:10px;line-height:1.2}
+html[data-layout="nocturne"] #protectionOptions.segmented.vertical { grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;max-width:460px;width:100%;margin:0 auto; }
+html[data-layout="nocturne"] #protectionOptions.segmented.vertical button { min-height:44px;padding:5px 4px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;text-align:center;white-space:nowrap; }
+html[data-layout="nocturne"] #protectionOptions strong{font-size:10px;font-weight:680} html[data-layout="nocturne"] #protectionOptions .protection-default-mark{display:block;color:var(--muted);font-size:7px;line-height:1}
 html[data-layout="nocturne"] #dynamicsPanel .floating-body {
   display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-auto-rows:min-content;column-gap:12px;align-content:start;
 }
@@ -1743,8 +1742,8 @@ html[data-animated-background="true"] :is(.primary-surface,.control-strip,.float
   transform:translateZ(0);
 }
 
-html[data-layout="rice"] #protectionPanel[data-presentation="workspace-page"] .floating-body,html[data-layout="nocturne"] #protectionPanel[data-presentation="workspace-page"] .floating-body{align-content:start;max-height:230px;padding-bottom:14px}
-html[data-layout="rice"] #protectionPanel[data-presentation="workspace-page"] .strong-note,html[data-layout="nocturne"] #protectionPanel[data-presentation="workspace-page"] .strong-note{max-width:440px;margin:0 auto;text-align:center}
+html[data-layout="rice"] #protectionPanel[data-presentation="workspace-page"] .floating-body,html[data-layout="nocturne"] #protectionPanel[data-presentation="workspace-page"] .floating-body{align-content:start;max-height:148px;overflow:hidden;padding:10px 12px 11px;gap:7px}
+html[data-layout="rice"] #protectionPanel .protection-mode-hint,html[data-layout="nocturne"] #protectionPanel .protection-mode-hint{max-width:460px;width:100%;margin:0 auto;box-sizing:border-box}
 
 /* Appearance inspector replaces Audio Tools; the working EQ stays 1:1. */
 html[data-layout="rice"] .app-shell,html[data-layout="nocturne"] .app-shell{transform:none!important;transition:none!important}

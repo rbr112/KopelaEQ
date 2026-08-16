@@ -1,6 +1,6 @@
 export type EqFilterType = 'lowshelf' | 'peaking' | 'highshelf';
 export type DynamicsMode = 'normal' | 'multiband';
-export type ProtectionMode = 'strong' | 'medium' | 'light' | 'off';
+export type ProtectionMode = 'maximum' | 'strong' | 'medium' | 'light' | 'off';
 export type SpectrumMode = 'fast' | 'balanced' | 'smooth';
 export type ReverbType = 'room' | 'hall' | 'plate';
 
@@ -109,6 +109,10 @@ export interface MeterSnapshot {
   rmsDb: number;
   gainReductionDb: number;
   dynamicsReductionDb: number;
+  /** True-peak telemetry from Maximum's final post-effects limiter. */
+  maximumInputTruePeakDb?: number;
+  maximumOutputTruePeakDb?: number;
+  maximumLimiterReductionDb?: number;
   spectrum?: number[];
 }
 

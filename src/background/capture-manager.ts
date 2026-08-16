@@ -1,4 +1,4 @@
-import { MessageType, normalizeAudioState, normalizeProtection } from '../shared/index.js';
+import { MessageType, normalizeProtection } from '../shared/index.js';
 import type { AudioState, ProtectionMode, SpectrumMode } from '../shared/types.js';
 import type { SessionStatusResponse, StatusResponse } from '../shared/messages.js';
 import { withTimeout } from '../shared/bounded.js';
@@ -13,6 +13,8 @@ export interface CaptureManagerStateProvider {
   getProtectionRevision?(): number;
   isStateAuthoritative?(): boolean;
   isProtectionAuthoritative?(): boolean;
+  rebaseStateRevision?(remoteRevision: number): number;
+  rebaseProtectionRevision?(remoteRevision: number): number;
 }
 
 interface CapturedTabInfo {
@@ -23,6 +25,8 @@ interface CapturedTabInfo {
 const AUDIBLE_MUTE_GRACE_MS = 700;
 const RECOVERY_COOLDOWN_MS = 1800;
 const CHROME_API_TIMEOUT_MS = 900;
+const OFFSCREEN_STATE_APPLY_TIMEOUT_MS = 3200;
+const OFFSCREEN_CAPTURE_START_TIMEOUT_MS = 5200;
 const RECONCILE_PROBE_ATTEMPTS = 3;
 
 function validTabId(value: unknown): number | null {
@@ -58,11 +62,12 @@ export class CaptureManager {
   constructor(private readonly stateProvider: CaptureManagerStateProvider) {
     this.protectionWriter = new LatestWinsWriter<ProtectionMode>(async ({ value, revision }) => {
       if (!(await this.hasOffscreenDocument())) return;
-      await withTimeout(
+      const response = responseRecord(await withTimeout(
         chrome.runtime.sendMessage({ target: 'offscreen', type: MessageType.ProtectionSet, protection: value, revision }),
-        CHROME_API_TIMEOUT_MS,
+        OFFSCREEN_STATE_APPLY_TIMEOUT_MS,
         'Offscreen protection update'
-      );
+      ));
+      if (response.ok !== true) throw new Error(typeof response.error === 'string' ? response.error : 'Offscreen rejected protection update.');
     });
   }
 
@@ -119,7 +124,7 @@ export class CaptureManager {
       }
       const result = responseRecord(await withTimeout(
         chrome.runtime.sendMessage({ target: 'offscreen', type: MessageType.StateSet, state: value, tabId, revision }),
-        CHROME_API_TIMEOUT_MS,
+        OFFSCREEN_STATE_APPLY_TIMEOUT_MS,
         'Offscreen state update'
       ));
       const active = Boolean(result.active);
@@ -180,11 +185,29 @@ export class CaptureManager {
       const result = await withTimeout(chrome.runtime.sendMessage(payload) as Promise<SessionStatusResponse>, CHROME_API_TIMEOUT_MS, 'Offscreen status');
       if (!result || result.ok !== true) return null;
       const activeTabs = Array.isArray(result.activeTabs) ? result.activeTabs : [];
-      const protection = this.stateProvider.getProtection();
-      if (activeTabs.length && normalizeProtection(result.protection) !== protection) {
+      const desiredState = this.stateProvider.getAudioState();
+      const desiredStateRevision = this.currentStateRevision();
+      const remoteStateRevision = Number.isInteger(Number(result.stateRevision)) ? Number(result.stateRevision) : -1;
+      if (activeTabs.length && remoteStateRevision < desiredStateRevision) {
         try {
-          await withTimeout(chrome.runtime.sendMessage({ target: 'offscreen', type: MessageType.ProtectionSet, protection, revision: this.currentProtectionRevision() }), CHROME_API_TIMEOUT_MS, 'Protection sync');
+          await withTimeout(
+            chrome.runtime.sendMessage({ target: 'offscreen', type: MessageType.StateSet, state: desiredState, revision: desiredStateRevision }),
+            OFFSCREEN_STATE_APPLY_TIMEOUT_MS,
+            'State sync'
+          );
+          result.state = desiredState;
+          result.stateRevision = desiredStateRevision;
+        } catch { /* later status/state mutation can retry */ }
+      }
+
+      const protection = this.stateProvider.getProtection();
+      const desiredProtectionRevision = this.currentProtectionRevision();
+      const remoteProtectionRevision = Number.isInteger(Number(result.protectionRevision)) ? Number(result.protectionRevision) : -1;
+      if (activeTabs.length && remoteProtectionRevision <= desiredProtectionRevision && (remoteProtectionRevision < desiredProtectionRevision || normalizeProtection(result.protection) !== protection)) {
+        try {
+          await withTimeout(chrome.runtime.sendMessage({ target: 'offscreen', type: MessageType.ProtectionSet, protection, revision: desiredProtectionRevision }), CHROME_API_TIMEOUT_MS, 'Protection sync');
           result.protection = protection;
+          result.protectionRevision = desiredProtectionRevision;
         } catch { /* later reconciliation can retry */ }
       }
       return result;
@@ -206,7 +229,7 @@ export class CaptureManager {
     if (!remote?.active) return false;
     if (remote.trackReadyState === 'ended') return false;
     if (remote.trackEnabled === false) return false;
-    if (remote.contextState === 'closed') return false;
+    if (remote.contextState !== 'running') return false;
     return true;
   }
 
@@ -351,10 +374,14 @@ export class CaptureManager {
         protection: this.stateProvider.getProtection(),
         stateRevision: this.currentStateRevision(),
         protectionRevision: this.currentProtectionRevision()
-      }), CHROME_API_TIMEOUT_MS, 'Offscreen capture start'));
+      }), OFFSCREEN_CAPTURE_START_TIMEOUT_MS, 'Offscreen capture start'));
       if (result.ok !== true) throw new Error(typeof result.error === 'string' ? result.error : 'Audio engine did not start.');
       this.setPhase(tabId, 'active');
       this.recoveryCooldownUntil.delete(tabId);
+      // A track can already be muted when listeners are attached (for example
+      // during a YouTube media-source transition), so no mute event is guaranteed.
+      // Probe once after startup to catch that silent-initial-state case.
+      void this.probeHealthWhileAudible(tabId);
       return { ok: true, active: true, alreadyActive: result.alreadyActive === true };
     } catch (error) {
       this.setPhase(tabId, 'idle');
@@ -416,7 +443,10 @@ export class CaptureManager {
 
     const first = await this.queryOffscreenStatus(tabId);
     if (!this.desiredTabs.has(tabId) || this.healthProbeGeneration.get(tabId) !== token) return;
-    if (!first?.active || first.trackReadyState === 'ended' || first.trackEnabled === false || first.contextState === 'closed') {
+    // A failed status probe is uncertainty, not evidence of a broken capture.
+    // Recovery is destructive, so never restart from a transient IPC timeout.
+    if (!first) return;
+    if (!first.active || first.trackReadyState === 'ended' || first.trackEnabled === false || first.contextState !== 'running') {
       this.scheduleRecovery(tabId, 'unhealthy-session');
       return;
     }
@@ -430,7 +460,8 @@ export class CaptureManager {
     if (audible !== true) return;
     const second = await this.queryOffscreenStatus(tabId);
     if (!this.desiredTabs.has(tabId) || this.healthProbeGeneration.get(tabId) !== token) return;
-    if (!second?.active || second.trackReadyState === 'ended' || second.trackEnabled === false || second.contextState === 'closed') {
+    if (!second) return;
+    if (!second.active || second.trackReadyState === 'ended' || second.trackEnabled === false || second.contextState !== 'running') {
       this.scheduleRecovery(tabId, 'unhealthy-session');
       return;
     }
@@ -476,8 +507,7 @@ export class CaptureManager {
   }
 
   async propagateProtection(protection: ProtectionMode, revision = this.currentProtectionRevision()): Promise<void> {
-    try { await this.protectionWriter.submit({ revision, value: protection }); }
-    catch { /* a later status/protection mutation can retry */ }
+    await this.protectionWriter.submit({ revision, value: protection });
   }
 
   async meter(tabIdValue: unknown, spectrum: boolean, spectrumMode: SpectrumMode = 'balanced', levels = true): Promise<Record<string, unknown>> {
@@ -510,7 +540,10 @@ export class CaptureManager {
       active,
       pending: ['starting','stopping','recovering'].includes(this.phaseFor(tabId)) || remotePending || browserPending,
       phase: this.phaseFor(tabId),
-      state: active && remote?.state ? normalizeAudioState(remote.state) : this.stateProvider.getAudioState(),
+      // Background/storage is the authoritative desired state. Remote session state
+      // is runtime telemetry only; returning it here can make a failed/stale
+      // offscreen apply look like the user's setting reverted.
+      state: this.stateProvider.getAudioState(),
       protection: this.stateProvider.getProtection(),
       stateAuthoritative: this.stateIsAuthoritative(),
       protectionAuthoritative: this.protectionIsAuthoritative(),
@@ -543,6 +576,21 @@ export class CaptureManager {
       this.setDesired(info.tabId, true);
       if (!remoteTabs.has(info.tabId) && info.status === 'active') this.scheduleRecovery(info.tabId, 'orphan-browser-capture');
     }
+
+    // MV3 service workers may restart while the offscreen document survives.
+    // Its revision counters therefore can be much higher than freshly-created
+    // background counters. Rebase above the surviving runtime before accepting
+    // any new user mutation, then converge runtime to the durable desired state.
+    if (remoteTabs.size) {
+      const remoteStateRevision = Number.isInteger(Number(remote.stateRevision)) ? Number(remote.stateRevision) : -1;
+      const remoteProtectionRevision = Number.isInteger(Number(remote.protectionRevision)) ? Number(remote.protectionRevision) : -1;
+      const stateRevision = this.stateProvider.rebaseStateRevision?.(remoteStateRevision) ?? this.currentStateRevision();
+      const protectionRevision = this.stateProvider.rebaseProtectionRevision?.(remoteProtectionRevision) ?? this.currentProtectionRevision();
+      await Promise.all([
+        this.propagateStateToAll(this.stateProvider.getAudioState(), stateRevision),
+        this.propagateProtection(this.stateProvider.getProtection(), protectionRevision)
+      ]);
+    }
   }
 
   onSessionEnded(tabIdValue: unknown): void {
@@ -558,7 +606,7 @@ export class CaptureManager {
     const tabId = validTabId(tabIdValue);
     if (tabId === null || !this.desiredTabs.has(tabId)) return;
     if (!trackMuted) this.invalidateHealthProbe(tabId);
-    if (readyState === 'ended' || contextState === 'closed') {
+    if (readyState === 'ended' || (contextState !== null && contextState !== undefined && contextState !== 'running')) {
       this.scheduleRecovery(tabId, 'session-health-event');
       return;
     }

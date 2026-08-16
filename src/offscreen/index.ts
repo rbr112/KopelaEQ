@@ -14,30 +14,77 @@ const sessions = new Map<number, AudioSession>();
 const pendingSessions = new Map<number, Promise<{ ok: true }>>();
 const sessionGeneration = new Map<number, number>();
 const sessionStateRevision = new Map<number, number>();
+const sessionStateRequestRevision = new Map<number, number>();
 const sessionProtectionRevision = new Map<number, number>();
+const sessionProtectionRequestRevision = new Map<number, number>();
 let audioContext: AudioContext | null = null;
 let globalState: AudioState = normalizeAudioState(null);
 let globalProtection: ProtectionMode = 'strong';
 let globalStateRevision = 0;
 let globalProtectionRevision = 0;
-let contextResumeInFlight: Promise<void> | null = null;
+let contextResumeInFlight: Promise<boolean> | null = null;
 let pitchWorkletContext: AudioContext | null = null;
 let pitchWorkletLoad: Promise<void> | null = null;
+let maximumLimiterWorkletContext: AudioContext | null = null;
+let maximumLimiterWorkletLoad: Promise<void> | null = null;
 
+const AUDIO_CONTEXT_RESUME_ATTEMPTS = 4;
+const AUDIO_CONTEXT_RESUME_RETRY_MS = 90;
 
 function pitchRequested(state: AudioState): boolean {
   return state.pitchShift.enabled && Math.abs(state.pitchShift.semitones) > 0.0001;
+}
+
+function maximumProtectionRequested(value: ProtectionMode): boolean {
+  return value === 'maximum';
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function ensurePitchWorklet(context: AudioContext): Promise<void> {
   if (pitchWorkletContext === context) return;
   if (!context.audioWorklet) throw new Error('AudioWorklet is unavailable in this Chrome build.');
   if (pitchWorkletLoad) return pitchWorkletLoad;
-  pitchWorkletLoad = context.audioWorklet
-    .addModule(chrome.runtime.getURL('js/audio/pitch-worklet-processor.js'))
-    .then(() => { pitchWorkletContext = context; })
-    .finally(() => { pitchWorkletLoad = null; });
+  const url = chrome.runtime.getURL('js/audio/pitch-worklet-processor.js');
+  pitchWorkletLoad = (async () => {
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        await context.audioWorklet.addModule(url);
+        pitchWorkletContext = context;
+        return;
+      } catch (error) {
+        lastError = error;
+        if (attempt < 2) await wait(80 * (attempt + 1));
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error(String(lastError || 'Pitch AudioWorklet failed to load.'));
+  })().finally(() => { pitchWorkletLoad = null; });
   return pitchWorkletLoad;
+}
+
+async function ensureMaximumLimiterWorklet(context: AudioContext): Promise<void> {
+  if (maximumLimiterWorkletContext === context) return;
+  if (!context.audioWorklet) throw new Error('AudioWorklet is unavailable in this Chrome build.');
+  if (maximumLimiterWorkletLoad) return maximumLimiterWorkletLoad;
+  const url = chrome.runtime.getURL('js/audio/true-peak-limiter-processor.js');
+  maximumLimiterWorkletLoad = (async () => {
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        await context.audioWorklet.addModule(url);
+        maximumLimiterWorkletContext = context;
+        return;
+      } catch (error) {
+        lastError = error;
+        if (attempt < 2) await wait(80 * (attempt + 1));
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error(String(lastError || 'Maximum limiter AudioWorklet failed to load.'));
+  })().finally(() => { maximumLimiterWorkletLoad = null; });
+  return maximumLimiterWorkletLoad;
 }
 
 function messageRevision(value: unknown, fallback: number): number {
@@ -47,26 +94,40 @@ function messageRevision(value: unknown, fallback: number): number {
 
 async function applyStateToSession(session: AudioSession, state: AudioState, revision: number): Promise<boolean> {
   const tabId = session.tabId;
-  const previousRevision = sessionStateRevision.get(tabId) ?? -1;
-  if (revision < previousRevision) return false;
-  // Claim the revision before any await. If a newer request arrives while the
-  // worklet module loads, the post-await guard prevents this request applying.
-  sessionStateRevision.set(tabId, revision);
+  const appliedRevision = sessionStateRevision.get(tabId) ?? -1;
+  const requestedRevision = sessionStateRequestRevision.get(tabId) ?? appliedRevision;
+  if (revision < appliedRevision || revision < requestedRevision) return false;
+
+  // Request revision and applied revision are intentionally separate. A pitch
+  // worklet load can fail or be superseded while awaiting; failed work must not
+  // be advertised by SessionStatus as if the audio graph had already applied it.
+  sessionStateRequestRevision.set(tabId, revision);
   if (pitchRequested(state)) {
     await ensurePitchWorklet(session.context);
-    if (sessionStateRevision.get(tabId) !== revision) return false;
+    if (sessionStateRequestRevision.get(tabId) !== revision) return false;
     session.ensurePitchProcessor();
   }
-  if (sessionStateRevision.get(tabId) !== revision) return false;
+  if (sessionStateRequestRevision.get(tabId) !== revision) return false;
   session.applyState(state);
+  sessionStateRevision.set(tabId, revision);
   return true;
 }
 
-function applyProtectionToSession(session: AudioSession, value: ProtectionMode, revision: number): boolean {
-  const previousRevision = sessionProtectionRevision.get(session.tabId) ?? -1;
-  if (revision < previousRevision) return false;
-  sessionProtectionRevision.set(session.tabId, revision);
+async function applyProtectionToSession(session: AudioSession, value: ProtectionMode, revision: number): Promise<boolean> {
+  const tabId = session.tabId;
+  const appliedRevision = sessionProtectionRevision.get(tabId) ?? -1;
+  const requestedRevision = sessionProtectionRequestRevision.get(tabId) ?? appliedRevision;
+  if (revision < appliedRevision || revision < requestedRevision) return false;
+
+  sessionProtectionRequestRevision.set(tabId, revision);
+  if (maximumProtectionRequested(value)) {
+    await ensureMaximumLimiterWorklet(session.context);
+    if (sessionProtectionRequestRevision.get(tabId) !== revision) return false;
+    session.ensureMaximumLimiterProcessor();
+  }
+  if (sessionProtectionRequestRevision.get(tabId) !== revision) return false;
   session.applyProtection(value);
+  sessionProtectionRevision.set(tabId, revision);
   return true;
 }
 
@@ -81,18 +142,40 @@ function isExpectedCancellation(error: unknown): boolean {
   return /audio capture was cancelled/i.test(message);
 }
 
-async function ensureAudioContextRunning(): Promise<void> {
+async function resumeAudioContext(context: AudioContext, attempts = AUDIO_CONTEXT_RESUME_ATTEMPTS): Promise<boolean> {
+  const state = (): AudioContextState => context.state as AudioContextState;
+  if (state() === 'running') return true;
+  if (state() === 'closed') return false;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try { await context.resume(); } catch { /* retry below */ }
+    if (state() === 'running') return true;
+    if (state() === 'closed') return false;
+    if (attempt + 1 < attempts) await wait(AUDIO_CONTEXT_RESUME_RETRY_MS * (attempt + 1));
+  }
+  return state() === 'running';
+}
+
+async function ensureAudioContextRunning(): Promise<boolean> {
   const context = audioContext;
-  if (!context || context.state !== 'suspended' || !sessions.size) return;
+  if (!context) return false;
+  if (context.state === 'running') return true;
+  if (context.state === 'closed') return false;
+  if (!sessions.size) return false;
   if (contextResumeInFlight) return contextResumeInFlight;
-  contextResumeInFlight = context.resume().catch(() => undefined).finally(() => { contextResumeInFlight = null; });
+  contextResumeInFlight = resumeAudioContext(context).finally(() => { contextResumeInFlight = null; });
   return contextResumeInFlight;
 }
 
 function bindAudioContextHealth(context: AudioContext): void {
   context.addEventListener('statechange', () => {
-    if (audioContext !== context || !sessions.size) return;
-    if (context.state === 'suspended') void ensureAudioContextRunning();
+    if (audioContext !== context || !sessions.size || context.state === 'running') return;
+    void ensureAudioContextRunning().then((running) => {
+      if (running || audioContext !== context) return;
+      // tabCapture suppresses the tab's native playback. If our output context
+      // cannot resume, tell background immediately so it can release/recover
+      // capture instead of leaving the user with a silently captured tab.
+      for (const session of sessions.values()) void handleSessionHealthChange(session.tabId, session.health());
+    });
   });
 }
 
@@ -101,9 +184,10 @@ async function getAudioContext(): Promise<AudioContext> {
     audioContext = new AudioContext({ latencyHint: 'playback' });
     bindAudioContextHealth(audioContext);
   }
-  if (audioContext.state === 'suspended') {
-    try { await audioContext.resume(); } catch { /* stream may not be ready yet */ }
-  }
+  // Best-effort warm resume before taking ownership of tab audio. A second,
+  // strict resume happens after getUserMedia because active capture can make
+  // Web Audio eligible to run even when this early attempt was suspended.
+  if (audioContext.state !== 'running') await resumeAudioContext(audioContext, 2);
   return audioContext;
 }
 
@@ -116,7 +200,9 @@ function maybeSuspendContext(): void {
 async function handleSessionEnded(tabId: number): Promise<void> {
   sessions.delete(tabId);
   sessionStateRevision.delete(tabId);
+  sessionStateRequestRevision.delete(tabId);
   sessionProtectionRevision.delete(tabId);
+  sessionProtectionRequestRevision.delete(tabId);
   try { await chrome.runtime.sendMessage({ type: MessageType.SessionEnded, tabId, reason: 'track-ended' }); } catch { /* worker may be restarting */ }
   maybeSuspendContext();
 }
@@ -172,16 +258,26 @@ async function createSession(
     // StateSet may have advanced globalState while getUserMedia was pending.
     // Always construct from the newest accepted global snapshot.
     if (pitchRequested(globalState)) await ensurePitchWorklet(context);
+    if (maximumProtectionRequested(globalProtection)) await ensureMaximumLimiterWorklet(context);
     if (sessionGeneration.get(tabId) !== generation) throw new Error('Audio capture was cancelled.');
     const session = new AudioSession(context, tabId, stream, globalState, globalProtection, {
       onEnded: handleSessionEnded,
       onHealthChange: handleSessionHealthChange,
-      pitchWorkletReady: pitchWorkletContext === context
+      pitchWorkletReady: pitchWorkletContext === context,
+      maximumLimiterWorkletReady: maximumLimiterWorkletContext === context
     });
+    // Do not advertise capture as active until local playback is actually live.
+    // Chrome suppresses native tab playback as soon as the tab MediaStream is
+    // consumed, so accepting a suspended AudioContext would create total silence.
+    if (!(await resumeAudioContext(context))) {
+      session.dispose();
+      throw new Error('Audio output could not start because the AudioContext remained suspended.');
+    }
     sessions.set(tabId, session);
     sessionStateRevision.set(tabId, globalStateRevision);
+    sessionStateRequestRevision.set(tabId, globalStateRevision);
     sessionProtectionRevision.set(tabId, globalProtectionRevision);
-    if (context.state === 'suspended') await context.resume();
+    sessionProtectionRequestRevision.set(tabId, globalProtectionRevision);
     return { ok: true };
   } catch (error) {
     if (stream && !sessions.has(tabId)) {
@@ -202,7 +298,7 @@ async function startSession(message: Extract<OffscreenMessage, { type: typeof Me
     const stateRevision = message.stateRevision;
     const protectionRevision = message.protectionRevision;
     if (message.state) await applyStateToSession(existing, normalizeAudioState(message.state), stateRevision);
-    if (message.protection) applyProtectionToSession(existing, normalizeProtection(message.protection), protectionRevision);
+    if (message.protection) await applyProtectionToSession(existing, normalizeProtection(message.protection), protectionRevision);
     return { ok: true, alreadyActive: true };
   }
 
@@ -214,7 +310,7 @@ async function startSession(message: Extract<OffscreenMessage, { type: typeof Me
       const stateRevision = message.stateRevision;
       const protectionRevision = message.protectionRevision;
       if (message.state) await applyStateToSession(session, normalizeAudioState(message.state), stateRevision);
-      if (message.protection) applyProtectionToSession(session, normalizeProtection(message.protection), protectionRevision);
+      if (message.protection) await applyProtectionToSession(session, normalizeProtection(message.protection), protectionRevision);
       return { ok: true, alreadyActive: true };
     }
   }
@@ -239,7 +335,9 @@ function stopSession(tabId: unknown): { ok: true } {
     session.dispose();
     sessions.delete(id);
     sessionStateRevision.delete(id);
+    sessionStateRequestRevision.delete(id);
     sessionProtectionRevision.delete(id);
+    sessionProtectionRequestRevision.delete(id);
   }
   maybeSuspendContext();
   return { ok: true };
@@ -291,11 +389,17 @@ async function handleMessage(message: OffscreenMessage): Promise<Record<string, 
     case MessageType.ProtectionSet: {
       const revision = messageRevision(message.revision, globalProtectionRevision + 1);
       const next = normalizeProtection(message.protection);
+      if (revision < globalProtectionRevision) return { ok: true, revision: globalProtectionRevision };
+
+      // Build/apply runtime first. In particular, Maximum must not become the
+      // advertised global mode until its AudioWorklet was actually loaded and
+      // every live session accepted the new path. Background will roll back with
+      // a newer revision if this operation reports an error.
+      await Promise.all([...sessions.values()].map((session) => applyProtectionToSession(session, next, revision)));
       if (revision >= globalProtectionRevision) {
         globalProtection = next;
         globalProtectionRevision = revision;
       }
-      for (const session of sessions.values()) applyProtectionToSession(session, next, revision);
       return { ok: true, revision: globalProtectionRevision };
     }
     case MessageType.MeterGet: {

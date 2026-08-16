@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "KopelaEQ",
-  "version": "1.28.8",
+  "version": "1.28.15",
   "minimum_chrome_version": "116",
   "description": "Real-time tab audio processor with parametric EQ, stereo tools, down-pitch, reverb/8D, meters, presets, dynamics, and protection.",
   "permissions": [

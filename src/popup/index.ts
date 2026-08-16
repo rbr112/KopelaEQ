@@ -1,6 +1,7 @@
 import * as S from '../shared/index.js';
 import { DEFAULT_SAMPLE_RATE } from '../audio/eq-response.js';
 import { pitchShiftLatencyMs } from '../audio/pitch-latency.js';
+import { settleBounded } from '../shared/bounded.js';
 import type { BackgroundMessage, ResponseFor } from '../shared/messages.js';
 import type { AudioState, ProtectionMode, SpectrumMode, WorkspaceState } from '../shared/types.js';
 import { EqUI } from './eq-ui.js';
@@ -13,6 +14,13 @@ import { collectPopupElements, type PopupElements } from './popup-elements.js';
 
 let state = S.defaultAudioState();
 let protection: ProtectionMode = 'strong';
+const PROTECTION_HINTS: Readonly<Record<ProtectionMode, string>> = Object.freeze({
+  maximum: 'Maximum — Strong protection plus a final true-peak peak catcher; no constant gain cut.',
+  strong: 'Strong — recommended balance of loudness and protection.',
+  medium: 'Medium — balanced peak control with less intervention.',
+  light: 'Light — gentle peak guard for modest EQ and Gain.',
+  off: 'Off — no peak limiting; aggressive Gain or EQ can clip.'
+});
 let workspace: WorkspaceState = {};
 let analyzerEnabled = true;
 let spectrumMode: SpectrumMode = 'balanced';
@@ -27,6 +35,9 @@ let stateIntentGeneration = 0;
 let protectionIntentGeneration = 0;
 let captureIntentGeneration = 0;
 let captureStatusGeneration = 0;
+let stateReadyForInput = false;
+let protectionReadyForInput = false;
+let authorityRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let eqUi: EqUI;
 let meterUi: MeterUI;
 let presetUi: PresetUI;
@@ -64,6 +75,28 @@ function setStatus(text: string, isError = false): void {
   els.statusText.style.color = isError ? 'var(--danger)' : '';
 }
 
+function stateInputReady(): boolean {
+  if (stateReadyForInput) return true;
+  setStatus('Loading saved audio settings…');
+  scheduleAuthorityRefresh(0);
+  return false;
+}
+
+function protectionInputReady(): boolean {
+  if (protectionReadyForInput) return true;
+  setStatus('Loading saved protection…');
+  scheduleAuthorityRefresh(0);
+  return false;
+}
+
+function scheduleAuthorityRefresh(delayMs = 180): void {
+  if (authorityRetryTimer !== null || (stateReadyForInput && protectionReadyForInput) || activeTabId === null) return;
+  authorityRetryTimer = setTimeout(() => {
+    authorityRetryTimer = null;
+    void refreshCaptureStatus().catch(() => scheduleAuthorityRefresh(300));
+  }, delayMs);
+}
+
 async function message<M extends BackgroundMessage>(payload: M): Promise<ResponseFor<M>> {
   const result = await chrome.runtime.sendMessage(payload) as ResponseFor<M>;
   if (!result || result.ok !== true) throw new Error((result && result.error) || 'KopelaEQ request failed.');
@@ -88,6 +121,7 @@ function fireAndReport(operation: Promise<unknown>): void {
 
 
 function sendStateRealtime(persistNow = false, syncGroups: readonly ControlSyncGroup[] = ALL_CONTROL_GROUPS): Promise<unknown> {
+  if (!stateInputReady()) return Promise.reject(new Error('Audio settings are still loading.'));
   state = S.normalizeAudioState(state);
   stateIntentGeneration += 1;
   updateControlState(syncGroups);
@@ -173,6 +207,8 @@ function syncProtectionControls(): void {
   const pspan = els.protectionButton.querySelector('[data-state-label]') || els.protectionButton.querySelector('span'); if (pspan) pspan.textContent = capitalize(protection);
   if (els.footerProtection) els.footerProtection.textContent = capitalize(protection);
   for (const button of els.protectionOptions.querySelectorAll<HTMLElement>('[data-protection]')) button.classList.toggle('active', button.dataset.protection === protection);
+  if (els.protectionModeHint) els.protectionModeHint.textContent = PROTECTION_HINTS[protection];
+  if (els.maximumProtectionStats) els.maximumProtectionStats.hidden = protection !== 'maximum';
 }
 
 function syncAnalyzerControls(): void {
@@ -183,7 +219,7 @@ function syncAnalyzerControls(): void {
 
 function syncCaptureControls(): void {
   els.powerToggle.setAttribute('aria-pressed', String(captureActive)); els.powerText.textContent = capturePending ? 'Starting…' : (captureActive ? 'On' : 'Off');
-  els.powerToggle.disabled = capturePending || activeTabId === null || !activeTabCapturable;
+  els.powerToggle.disabled = capturePending || !stateReadyForInput || !protectionReadyForInput || activeTabId === null || !activeTabCapturable;
 }
 
 function updateControlState(groups: readonly ControlSyncGroup[] = ALL_CONTROL_GROUPS): void {
@@ -230,23 +266,29 @@ async function refreshCaptureStatus(): Promise<void> {
     captureActive = result.active === true;
     capturePending = result.pending === true;
   }
-  if (stateGenerationAtStart === stateIntentGeneration && result.stateAuthoritative !== false && result.state) {
-    state = S.normalizeAudioState(result.state);
+  if (result.stateAuthoritative !== false && result.state) {
+    stateReadyForInput = true;
+    if (stateGenerationAtStart === stateIntentGeneration) state = S.normalizeAudioState(result.state);
   }
-  if (protectionGenerationAtStart === protectionIntentGeneration && result.protectionAuthoritative !== false && result.protection) {
-    protection = S.normalizeProtection(result.protection);
+  if (result.protectionAuthoritative !== false && result.protection) {
+    protectionReadyForInput = true;
+    if (protectionGenerationAtStart === protectionIntentGeneration) protection = S.normalizeProtection(result.protection);
   }
   if (Number(result.sampleRate) >= 8000) {
     engineSampleRate = Math.round(Number(result.sampleRate));
     if (eqUi?.setSampleRate(engineSampleRate)) eqUi.queueDraw();
   }
   updateControlState();
-  if (result.phase === 'recovering') setStatus('Reconnecting audio…');
+  if (!stateReadyForInput || !protectionReadyForInput) {
+    setStatus('Loading saved audio settings…');
+    scheduleAuthorityRefresh();
+  } else if (result.phase === 'recovering') setStatus('Reconnecting audio…');
   else if (captureActive && result.trackMuted === true) setStatus('Waiting for tab audio…');
   else setStatus(captureActive ? 'Processing current tab' : 'Processing stopped');
 }
 
 async function toggleCapture(): Promise<void> {
+  if (!stateInputReady() || !protectionInputReady()) return;
   if (activeTabId === null || !activeTabCapturable || capturePending) return;
   captureIntentGeneration += 1;
   captureStatusGeneration += 1;
@@ -258,8 +300,9 @@ async function toggleCapture(): Promise<void> {
   finally { capturePending = false; updateControlState(['capture']); }
 }
 
-function protectionRank(value: ProtectionMode): number { return ({ off: 0, light: 1, medium: 2, strong: 3 })[value] ?? 3; }
+function protectionRank(value: ProtectionMode): number { return ({ off: 0, light: 1, medium: 2, strong: 3, maximum: 4 })[value] ?? 3; }
 async function setProtection(value: unknown): Promise<void> {
+  if (!protectionInputReady()) return;
   const next = S.normalizeProtection(value); if (protectionRank(next) < protectionRank(protection) && !confirm('Lower clip protection can allow peaks to distort when Gain or EQ is aggressive. Continue?')) return;
   const previous = protection; protection = next; protectionIntentGeneration += 1; updateControlState(['protection']);
   const requestGeneration = protectionIntentGeneration;
@@ -268,8 +311,8 @@ async function setProtection(value: unknown): Promise<void> {
 }
 
 function bindRange(element: HTMLInputElement, group: ControlSyncGroup, update: () => void): void {
-  element.addEventListener('input', () => { update(); fireAndReport(sendStateRealtime(false, [group])); });
-  element.addEventListener('change', () => { update(); fireAndReport(sendStateRealtime(true, [group])); });
+  element.addEventListener('input', () => { if (!stateInputReady()) return; update(); fireAndReport(sendStateRealtime(false, [group])); });
+  element.addEventListener('change', () => { if (!stateInputReady()) return; update(); fireAndReport(sendStateRealtime(true, [group])); });
 }
 function bindAudioControls(): void {
   bindRange(els.gainSlider, 'gain', () => {
@@ -277,21 +320,21 @@ function bindAudioControls(): void {
     state.gainDb = Math.abs(raw) <= 0.25 ? 0 : raw;
     if (state.gainDb === 0 && raw !== 0) els.gainSlider.value = '0';
   });
-  els.gainResetButton.addEventListener('click', () => { state.gainDb = 0; fireAndReport(sendStateRealtime(true, ['gain'])); setStatus('Gain reset to 0 dB'); });
-  els.gainSlider.addEventListener('dblclick', () => { state.gainDb = 0; fireAndReport(sendStateRealtime(true, ['gain'])); setStatus('Gain reset to 0 dB'); });
-  els.resetButton.addEventListener('click', () => { const defaults = S.defaultAudioState(); state.gainDb = defaults.gainDb; state.eq = defaults.eq; markEdited(); fireAndReport(sendStateRealtime(true, ['gain', 'bandEditor'])); setStatus('Gain and EQ reset'); });
-  els.dynamicsEnabled.addEventListener('change', () => { state.dynamics.enabled = els.dynamicsEnabled.checked; fireAndReport(sendStateRealtime(true, ['dynamics'])); });
-  els.normalModeButton.addEventListener('click', () => { state.dynamics.mode = 'normal'; fireAndReport(sendStateRealtime(true, ['dynamics'])); }); els.multibandModeButton.addEventListener('click', () => { state.dynamics.mode = 'multiband'; fireAndReport(sendStateRealtime(true, ['dynamics'])); });
+  els.gainResetButton.addEventListener('click', () => { if (!stateInputReady()) return; state.gainDb = 0; fireAndReport(sendStateRealtime(true, ['gain'])); setStatus('Gain reset to 0 dB'); });
+  els.gainSlider.addEventListener('dblclick', () => { if (!stateInputReady()) return; state.gainDb = 0; fireAndReport(sendStateRealtime(true, ['gain'])); setStatus('Gain reset to 0 dB'); });
+  els.resetButton.addEventListener('click', () => { if (!stateInputReady()) return; const defaults = S.defaultAudioState(); state.gainDb = defaults.gainDb; state.eq = defaults.eq; markEdited(); fireAndReport(sendStateRealtime(true, ['gain', 'bandEditor'])); setStatus('Gain and EQ reset'); });
+  els.dynamicsEnabled.addEventListener('change', () => { if (!stateInputReady()) return; state.dynamics.enabled = els.dynamicsEnabled.checked; fireAndReport(sendStateRealtime(true, ['dynamics'])); });
+  els.normalModeButton.addEventListener('click', () => { if (!stateInputReady()) return; state.dynamics.mode = 'normal'; fireAndReport(sendStateRealtime(true, ['dynamics'])); }); els.multibandModeButton.addEventListener('click', () => { if (!stateInputReady()) return; state.dynamics.mode = 'multiband'; fireAndReport(sendStateRealtime(true, ['dynamics'])); });
   bindRange(els.dynamicsAmount, 'dynamics', () => { state.dynamics.amount = Number(els.dynamicsAmount.value) / 100; }); bindRange(els.dynamicsResponse, 'dynamics', () => { state.dynamics.response = Number(els.dynamicsResponse.value) / 100; });
   bindRange(els.lowCrossover, 'dynamics', () => { state.dynamics.lowCrossoverHz = Number(els.lowCrossover.value); if (state.dynamics.highCrossoverHz < state.dynamics.lowCrossoverHz + 400) state.dynamics.highCrossoverHz = state.dynamics.lowCrossoverHz + 400; });
   bindRange(els.highCrossover, 'dynamics', () => { state.dynamics.highCrossoverHz = Math.max(Number(els.highCrossover.value), state.dynamics.lowCrossoverHz + 400); });
 
-  els.stereoEnabled.addEventListener('change', () => { state.stereo.enabled = els.stereoEnabled.checked; fireAndReport(sendStateRealtime(true, ['stereo'])); }); bindRange(els.stereoWidth, 'stereo', () => { state.stereo.width = Number(els.stereoWidth.value) / 100; }); bindRange(els.stereoBalance, 'stereo', () => { state.stereo.balance = Number(els.stereoBalance.value) / 100; });
-  els.stereoMonoButton.addEventListener('click', () => { state.stereo.mono = !state.stereo.mono; fireAndReport(sendStateRealtime(true, ['stereo'])); }); els.stereoSwapButton.addEventListener('click', () => { state.stereo.swap = !state.stereo.swap; fireAndReport(sendStateRealtime(true, ['stereo'])); });
-  els.pitchEnabled.addEventListener('change', () => { state.pitchShift.enabled = els.pitchEnabled.checked; fireAndReport(sendStateRealtime(true, ['effects'])); }); bindRange(els.pitchSemitones, 'effects', () => { state.pitchShift.semitones = Number(els.pitchSemitones.value); });
-  els.reverbEnabled.addEventListener('change', () => { state.reverb.enabled = els.reverbEnabled.checked; fireAndReport(sendStateRealtime(true, ['effects'])); }); bindRange(els.reverbMix, 'effects', () => { state.reverb.mix = Number(els.reverbMix.value) / 100; });
-  els.reverbTypeOptions.addEventListener('click', (event: Event) => { const type = ((event.target as Element | null)?.closest('[data-reverb-type]') as HTMLElement | null)?.dataset.reverbType; if (type === 'room' || type === 'hall' || type === 'plate') { state.reverb.type = type; fireAndReport(sendStateRealtime(true, ['effects'])); } });
-  els.autoPanEnabled.addEventListener('change', () => { state.autoPan.enabled = els.autoPanEnabled.checked; fireAndReport(sendStateRealtime(true, ['effects'])); }); bindRange(els.autoPanRate, 'effects', () => { state.autoPan.rateHz = Number(els.autoPanRate.value); }); bindRange(els.autoPanDepth, 'effects', () => { state.autoPan.depth = Number(els.autoPanDepth.value) / 100; });
+  els.stereoEnabled.addEventListener('change', () => { if (!stateInputReady()) return; state.stereo.enabled = els.stereoEnabled.checked; fireAndReport(sendStateRealtime(true, ['stereo'])); }); bindRange(els.stereoWidth, 'stereo', () => { state.stereo.width = Number(els.stereoWidth.value) / 100; }); bindRange(els.stereoBalance, 'stereo', () => { state.stereo.balance = Number(els.stereoBalance.value) / 100; });
+  els.stereoMonoButton.addEventListener('click', () => { if (!stateInputReady()) return; state.stereo.mono = !state.stereo.mono; fireAndReport(sendStateRealtime(true, ['stereo'])); }); els.stereoSwapButton.addEventListener('click', () => { if (!stateInputReady()) return; state.stereo.swap = !state.stereo.swap; fireAndReport(sendStateRealtime(true, ['stereo'])); });
+  els.pitchEnabled.addEventListener('change', () => { if (!stateInputReady()) return; state.pitchShift.enabled = els.pitchEnabled.checked; fireAndReport(sendStateRealtime(true, ['effects'])); }); bindRange(els.pitchSemitones, 'effects', () => { state.pitchShift.semitones = Number(els.pitchSemitones.value); });
+  els.reverbEnabled.addEventListener('change', () => { if (!stateInputReady()) return; state.reverb.enabled = els.reverbEnabled.checked; fireAndReport(sendStateRealtime(true, ['effects'])); }); bindRange(els.reverbMix, 'effects', () => { state.reverb.mix = Number(els.reverbMix.value) / 100; });
+  els.reverbTypeOptions.addEventListener('click', (event: Event) => { if (!stateInputReady()) return; const type = ((event.target as Element | null)?.closest('[data-reverb-type]') as HTMLElement | null)?.dataset.reverbType; if (type === 'room' || type === 'hall' || type === 'plate') { state.reverb.type = type; fireAndReport(sendStateRealtime(true, ['effects'])); } });
+  els.autoPanEnabled.addEventListener('change', () => { if (!stateInputReady()) return; state.autoPan.enabled = els.autoPanEnabled.checked; fireAndReport(sendStateRealtime(true, ['effects'])); }); bindRange(els.autoPanRate, 'effects', () => { state.autoPan.rateHz = Number(els.autoPanRate.value); }); bindRange(els.autoPanDepth, 'effects', () => { state.autoPan.depth = Number(els.autoPanDepth.value) / 100; });
 
   els.analyzerToggle.addEventListener('click', async () => { const previous = analyzerEnabled; analyzerEnabled = !analyzerEnabled; if (!analyzerEnabled) spectrumFrozen = false; updateControlState(['analyzer']); eqUi.queueDraw(); try { await chrome.storage.local.set({ [S.STORAGE.VISUALIZER]: analyzerEnabled }); } catch (error: unknown) { analyzerEnabled = previous; updateControlState(['analyzer']); setStatus(error instanceof Error ? error.message : String(error), true); } });
   els.spectrumModeOptions.addEventListener('click', async (event: Event) => { const next = ((event.target as Element | null)?.closest('[data-spectrum-mode]') as HTMLElement | null)?.dataset.spectrumMode; if (next !== 'fast' && next !== 'balanced' && next !== 'smooth') return; spectrumMode = next; spectrumFrozen = false; updateControlState(['analyzer']); try { await chrome.storage.local.set({ [S.STORAGE.SPECTRUM_MODE]: spectrumMode }); } catch (error: unknown) { setStatus(error instanceof Error ? error.message : String(error), true); } });
@@ -340,14 +383,17 @@ async function init(): Promise<void> {
     console.error('KopelaEQ appearance startup recovered:', error);
     appearance.recoverToRice();
   }).finally(() => document.documentElement.classList.remove('appearance-loading'));
-  const localLoad = bounded(
+  const localLoad = settleBounded(
     chrome.storage.local.get([S.STORAGE.AUDIO_STATE, S.STORAGE.PROTECTION, S.STORAGE.WORKSPACE, S.STORAGE.VISUALIZER, S.STORAGE.SPECTRUM_MODE]) as Promise<Record<string, unknown>>,
-    {} as Record<string, unknown>,
-    'settings storage'
+    STARTUP_IO_TIMEOUT_MS
   );
   const tabLoad = getActiveTab();
-  const [, local, tab] = await Promise.all([appearanceLoad, localLoad, tabLoad]);
+  const [, localResult, tab] = await Promise.all([appearanceLoad, localLoad, tabLoad]);
+  const local = localResult.status === 'ok' ? localResult.value : {} as Record<string, unknown>;
+  if (localResult.status !== 'ok') console.warn('KopelaEQ popup settings read is not authoritative yet; controls wait for background state.');
 
+  // Local storage is only an initial visual hint. Background is the runtime owner
+  // and must confirm authority before audio controls can persist mutations.
   state = S.normalizeAudioState(local[S.STORAGE.AUDIO_STATE]); protection = S.normalizeProtection(local[S.STORAGE.PROTECTION]);
   workspace = local[S.STORAGE.WORKSPACE] && typeof local[S.STORAGE.WORKSPACE] === 'object' && !Array.isArray(local[S.STORAGE.WORKSPACE]) ? local[S.STORAGE.WORKSPACE] as WorkspaceState : {};
   analyzerEnabled = local[S.STORAGE.VISUALIZER] !== false; spectrumMode = ['fast','balanced','smooth'].includes(String(local[S.STORAGE.SPECTRUM_MODE])) ? local[S.STORAGE.SPECTRUM_MODE] as SpectrumMode : 'balanced';
@@ -384,8 +430,9 @@ async function init(): Promise<void> {
 
   // First interaction no longer waits for background IPC/preset restoration.
   // These independent enrichments update the already-live UI when they arrive.
-  void bounded(refreshCaptureStatus(), undefined, 'capture status', 500).catch((error: unknown) => {
+  void refreshCaptureStatus().catch((error: unknown) => {
     setStatus(error instanceof Error ? error.message : String(error), true);
+    scheduleAuthorityRefresh(300);
   });
   void presetLoad.then(() =>
     bounded(presetUi.restoreSelectedPreset(), undefined, 'preset selection', 500)

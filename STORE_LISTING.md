@@ -1,4 +1,4 @@
-# Chrome Web Store listing draft — KopelaEQ 1.28.8
+# Chrome Web Store listing draft — KopelaEQ 1.28.15
 
 Maintainer: **Kopela**
 
@@ -57,7 +57,7 @@ Productivity / Tools, whichever closest category is available in the current dev
 
 ## Suggested screenshots
 
-Use current 1.28.8 screenshots showing real extension UI and readable controls, for example:
+Use current 1.28.15 screenshots showing real extension UI and readable controls, for example:
 
 1. Main 11-band EQ with a bundled preset, showing the full 5 Hz–20 kHz graph range.
 2. Stereo panel with Width/Balance/Mono/Swap.

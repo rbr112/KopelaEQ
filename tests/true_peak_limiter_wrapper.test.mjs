@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+let registeredName='',Registered=null;
+globalThis.sampleRate=48000;
+globalThis.AudioWorkletProcessor=class { constructor(){this.port={messages:[],postMessage(v){this.messages.push(v);}};} };
+globalThis.registerProcessor=(name,ctor)=>{registeredName=name;Registered=ctor;};
+await import(`../extension/js/audio/true-peak-limiter-processor.js?wrapper=${Date.now()}`);
+assert.equal(registeredName,'kopelaeq-true-peak-limiter');
+assert.equal(typeof Registered,'function');
+const processor=new Registered();
+const inputL=new Float32Array(128).fill(1.2),inputR=new Float32Array(128).fill(0.3);
+const outputL=new Float32Array(128),outputR=new Float32Array(128);
+for(let i=0;i<24;i++) assert.equal(processor.process([[inputL,inputR]],[[outputL,outputR]]),true);
+assert.ok(processor.port.messages.some(m=>m.type==='meter'));
+console.log('true_peak_limiter_wrapper.test.mjs: PASS');
